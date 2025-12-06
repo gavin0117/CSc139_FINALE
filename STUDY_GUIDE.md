@@ -102,3 +102,82 @@
 
 15. What signal does kill() send by default?
 
+---
+
+## Chapter 6: Limited Direct Execution
+
+### Core Concept
+**Direct Execution**: Run program directly on CPU (fast but problematic)
+**Limited Direct Execution**: OS restricts what programs can do via hardware support
+
+### Two Main Problems
+1. **Restricted Operations**: How to prevent user programs from doing whatever they want?
+2. **Switching Between Processes**: How does OS regain control of CPU?
+
+### User Mode vs Kernel Mode
+- **User Mode**: Restricted; cannot issue I/O requests or privileged instructions
+- **Kernel Mode**: Full privileges; OS runs in this mode
+- **System Call**: User program requests OS to perform privileged operation
+- **Trap**: Enters kernel mode (raises privilege)
+- **Return-from-trap**: Returns to user mode (lowers privilege)
+
+### System Call Mechanism
+1. Program issues system call
+2. **Trap** into kernel (save registers, switch to kernel mode)
+3. OS handles request via **trap handler**
+4. OS executes **return-from-trap** (restore registers, switch to user mode)
+5. Program continues
+
+### Timer Interrupt
+- Hardware timer interrupts CPU periodically
+- Gives OS chance to regain control
+- OS can decide to switch to different process (context switch)
+
+### Context Switch
+- OS saves register state of current process (PCB)
+- OS restores register state of next process (PCB)
+- Switch to new process's kernel stack
+- Return-from-trap returns to new process
+
+### Practice Questions
+
+1. What does "Limited Direct Execution" mean?
+
+2. Why does direct execution need to be "limited"?
+
+3. What are the advantages of unlimited direct execution? What are the problems?
+
+4. What is the difference between user mode and kernel mode?
+
+5. How does a user program perform a privileged operation (like reading from disk)?
+
+6. What happens during a trap instruction?
+
+7. What happens during return-from-trap?
+
+8. How does the OS set up trap handlers? When does this happen?
+
+9. Why is a timer interrupt necessary for the OS?
+
+10. Without a timer interrupt, what could a malicious program do?
+
+11. Describe the complete flow when a program makes a system call to read a file.
+
+12. What is a context switch and when does it occur?
+
+13. What information must be saved during a context switch?
+
+14. How does the OS enforce limited direct execution?
+
+15. What is the trap table and when is it initialized?
+
+16. If a program runs a tight loop with no system calls, how does the OS regain control?
+
+17. What privilege level does user code run at? What about OS code?
+
+18. Why can't user programs directly access hardware?
+
+19. Explain the cooperative vs non-cooperative approach to regaining CPU control.
+
+20. What happens on boot with respect to trap handlers and timer interrupts?
+
