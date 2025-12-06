@@ -1185,3 +1185,157 @@ signal(&fill_cv);      // Wake consumer
 unlock(&m);
 ```
 
+---
+
+## Chapter 31: Semaphores
+
+### Definition
+- Integer value with two operations: **wait()** (P) and **post()** (V)
+- **sem_wait()**: Decrement; if negative, sleep
+- **sem_post()**: Increment; if threads waiting, wake one
+
+### As a Lock (Binary Semaphore)
+```c
+sem_t m;
+sem_init(&m, 0, 1);  // Initial value = 1
+
+sem_wait(&m);   // Lock (decrement to 0)
+// critical section
+sem_post(&m);   // Unlock (increment to 1)
+```
+
+### As a Condition Variable
+```c
+sem_t s;
+sem_init(&s, 0, 0);  // Initial value = 0
+
+// Thread 1
+sem_wait(&s);  // Wait (blocks if 0)
+
+// Thread 2
+sem_post(&s);  // Signal (wakes waiter)
+```
+
+### Producer/Consumer with Semaphores
+```c
+sem_t empty, full, mutex;
+sem_init(&empty, 0, MAX);  // # empty slots
+sem_init(&full, 0, 0);     // # full slots
+sem_init(&mutex, 0, 1);    // Lock
+
+// Producer
+sem_wait(&empty);  // Wait for empty slot
+sem_wait(&mutex);  // Lock
+put(item);
+sem_post(&mutex);  // Unlock
+sem_post(&full);   // Signal full slot
+
+// Consumer
+sem_wait(&full);   // Wait for full slot
+sem_wait(&mutex);  // Lock
+item = get();
+sem_post(&mutex);  // Unlock
+sem_post(&empty);  // Signal empty slot
+```
+
+### Dining Philosophers (Canonical Solution)
+```c
+// Prevent deadlock: last philosopher picks up forks in opposite order
+void getforks(int p) {
+    if (p == 4) {  // Last philosopher
+        sem_wait(forks[right(p)]);  // Right first!
+        sem_wait(forks[left(p)]);
+    } else {
+        sem_wait(forks[left(p)]);   // Left first
+        sem_wait(forks[right(p)]);
+    }
+}
+```
+
+### Practice Questions with Answers
+
+**Q1: What's the difference between a semaphore initialized to 1 vs 0?**
+
+**Answer:**
+- **sem_init(&s, 0, 1)**: Binary semaphore used as a **lock**. First wait() succeeds (1→0), subsequent waits block until post() (0→1).
+- **sem_init(&s, 0, 0)**: Used as **condition variable** for ordering. wait() blocks until another thread posts (0→1).
+
+**Q2: Can this code deadlock? Why?**
+```c
+// Thread 1
+sem_wait(&s1);
+sem_wait(&s2);
+
+// Thread 2
+sem_wait(&s2);
+sem_wait(&s1);
+```
+
+**Answer:**
+**YES! Classic deadlock:**
+- T1 acquires s1, T2 acquires s2
+- T1 waits for s2 (held by T2)
+- T2 waits for s1 (held by T1)
+- Both blocked forever
+**Fix:** Both acquire in same order (s1 then s2)
+
+**Q3: In producer/consumer, why must we wait(&empty) BEFORE wait(&mutex)?**
+
+**Answer:**
+If we reversed the order:
+```c
+sem_wait(&mutex);  // Lock first
+sem_wait(&empty);  // Then wait for slot
+```
+Problem: If buffer is full, producer holds mutex while sleeping! Consumer can't run (needs mutex to empty buffer). **Deadlock!**
+Must wait for resources before acquiring locks.
+
+**Q4: Implement a rendezvous using semaphores (two threads must reach a point before either continues).**
+
+**Answer:**
+```c
+sem_t s1, s2;
+sem_init(&s1, 0, 0);
+sem_init(&s2, 0, 0);
+
+// Thread 1
+statement1A;
+sem_post(&s1);
+sem_wait(&s2);
+statement1B;
+
+// Thread 2
+statement2A;
+sem_post(&s2);
+sem_wait(&s1);
+statement2B;
+```
+Ensures both 1A and 2A complete before either 1B or 2B starts.
+
+**Q5: Why does the Dining Philosophers solution prevent deadlock?**
+
+**Answer:**
+Deadlock requires circular wait: P0 waits for P1's fork, P1 waits for P2's fork, ..., P4 waits for P0's fork (cycle).
+
+By having one philosopher (P4) grab forks in opposite order:
+- P4 grabs right fork first (same as P0's left fork)
+- This breaks the cycle: can't have all philosophers holding one fork and waiting for the next
+
+At least one philosopher can always make progress.
+
+**Q6: Can semaphores replace both locks and condition variables?**
+
+**Answer:**
+**YES**, but it's often less clear:
+- **Lock**: Binary semaphore (init=1)
+- **Condition Variable**: Semaphore (init=0) with post() as signal, wait() as wait
+- However, semaphores don't have the built-in lock reacquisition that cond_wait has, making some patterns more complex
+
+**Q7: What happens if you call sem_post() without a corresponding sem_wait()?**
+
+**Answer:**
+Semaphore value increments beyond initial value. This can cause:
+- Lock semaphore: Value > 1 means multiple threads can enter critical section (broken mutual exclusion!)
+- Counting semaphore: May allow more resources than actually exist
+Unlike condition variables (signal with no waiter is lost), semaphore posts accumulate.
+
