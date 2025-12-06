@@ -1339,3 +1339,169 @@ Semaphore value increments beyond initial value. This can cause:
 - Counting semaphore: May allow more resources than actually exist
 Unlike condition variables (signal with no waiter is lost), semaphore posts accumulate.
 
+---
+
+## Chapter 32: Concurrency Bugs
+
+### Non-Deadlock Bugs
+
+**Atomicity Violation**: Failing to protect logically grouped accesses
+```c
+// Thread 1
+if (ptr != NULL)
+    // Thread 2 could run here and free ptr!
+    foo = ptr->field;  // CRASH
+
+// Fix: Lock around the entire check-and-use
+```
+
+**Order Violation**: Assuming operations happen in specific sequence
+```c
+// Thread 1
+void init() { ptr = malloc(...); }
+
+// Thread 2
+void use() { ptr->field = 5; }  // Assumes init() ran first!
+
+// Fix: Use condition variable for ordering
+```
+
+### Deadlock Conditions (All 4 Required)
+
+1. **Mutual exclusion**: Threads claim exclusive control of resources
+2. **Hold-and-wait**: Thread holds resources while waiting for more
+3. **No preemption**: Resources can't be forcibly taken
+4. **Circular wait**: Circular chain of threads waiting for each other
+
+### Deadlock Prevention
+
+**Total Ordering**: All threads acquire locks in same order
+```c
+// Always acquire L1 before L2
+lock(L1); lock(L2); // Good
+lock(L2); lock(L1); // BAD - can deadlock
+```
+
+**Trylock**: Avoid hold-and-wait
+```c
+top:
+lock(L1);
+if (trylock(L2) == -1) {
+    unlock(L1);
+    goto top;  // Retry
+}
+```
+
+**Lock-free Data Structures**: Use compare-and-swap instead of locks
+
+### Practice Questions with Answers
+
+**Q1: Identify the bug type:**
+```c
+// Thread 1
+if (list->head != NULL)
+    value = list->head->data;
+
+// Thread 2 (runs between the if and dereference)
+free(list->head);
+list->head = NULL;
+```
+
+**Answer:**
+**Atomicity violation**. Thread 1 fails to protect the logically grouped operations (check and use). The check and dereference must be atomic.
+
+**Fix:**
+```c
+lock(&m);
+if (list->head != NULL)
+    value = list->head->data;
+unlock(&m);
+```
+
+**Q2: Identify the bug type:**
+```c
+// Thread 1
+config = load_config();  // Slow
+
+// Thread 2 (starts immediately)
+use(config);  // config not initialized yet!
+```
+
+**Answer:**
+**Order violation**. Thread 2 assumes Thread 1's initialization completed first, but there's no synchronization enforcing this order.
+
+**Fix:**
+```c
+sem_t ready;
+sem_init(&ready, 0, 0);
+
+// Thread 1
+config = load_config();
+sem_post(&ready);
+
+// Thread 2
+sem_wait(&ready);
+use(config);
+```
+
+**Q3: Why does this code deadlock?**
+```c
+// Thread 1
+lock(A); lock(B);
+
+// Thread 2
+lock(B); lock(A);
+```
+
+**Answer:**
+**Circular wait** (one of the 4 deadlock conditions):
+- T1 holds A, waits for B
+- T2 holds B, waits for A
+- Circular dependency: T1→T2→T1
+
+**Fix:** Both threads acquire in same order (A then B).
+
+**Q4: Which deadlock condition does trylock() break?**
+
+**Answer:**
+**Hold-and-wait**. With trylock, if we can't get the second lock, we release the first lock (don't hold resources while waiting). This breaks the hold-and-wait condition, preventing deadlock.
+
+**Q5: Real-world studies show most concurrency bugs are NOT deadlocks. What are the two main types?**
+
+**Answer:**
+1. **Atomicity violations** (~97% of non-deadlock bugs): Failing to protect grouped accesses
+2. **Order violations** (~3% of non-deadlock bugs): Assuming specific execution order without enforcing it
+
+Deadlocks are actually rare in practice compared to these.
+
+**Q6: Explain how compare-and-swap enables lock-free data structures.**
+
+**Answer:**
+```c
+int CompareAndSwap(int *ptr, int expected, int new) {
+    int actual = *ptr;
+    if (actual == expected)
+        *ptr = new;
+    return actual;
+}
+```
+Atomically checks if value is expected, updates if so. This enables lock-free algorithms:
+```c
+do {
+    old = head;
+    new->next = old;
+} while (CompareAndSwap(&head, old, new) != old);
+```
+Retry loop instead of locks. Avoids deadlock entirely (breaks mutual exclusion condition).
+
+**Q7: A system has locks L1, L2, L3. Thread A: L1→L2, Thread B: L2→L3, Thread C: L3→L1. Can this deadlock?**
+
+**Answer:**
+**YES!** Circular wait exists:
+- A holds L1, wants L2
+- B holds L2, wants L3
+- C holds L3, wants L1
+- Cycle: A→B→C→A
+
+**Fix:** Establish total order (e.g., always L1→L2→L3), so all threads acquire in same sequence.
+
