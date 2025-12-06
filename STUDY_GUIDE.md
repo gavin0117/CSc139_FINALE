@@ -621,3 +621,102 @@ Virtual Address Space:          Physical Memory:
 - **Per-process**: Segment registers, page tables, PCB, register state, address space
 - **Shared/Global**: OS code, physical memory allocator, device drivers, CPU hardware, trap table
 
+---
+
+## Chapter 17: Free Space Management
+
+### Problem: External Fragmentation
+- Free space chopped into little pieces
+- Can't satisfy large allocation even if total free space is sufficient
+
+### Free List Strategies
+
+**Best Fit**: Find smallest block that fits (minimizes wasted space)
+**Worst Fit**: Find largest block (leaves bigger leftover chunk)
+**First Fit**: Find first block that fits (fast)
+**Next Fit**: Like first fit, but start from last allocation
+
+### Splitting and Coalescing
+
+**Splitting**: If block is too large, split it
+```
+Request 10 bytes from 30-byte block:
+Before: [30 bytes free]
+After:  [10 allocated][20 free]
+```
+
+**Coalescing**: Merge adjacent free blocks
+```
+Free block A, then B (adjacent):
+Before: [A: used][B: used][C: free]
+After A freed: [A: free][B: used][C: free]
+After B freed: [A+B+C: free] ← coalesced!
+```
+
+### Visual: Free List with Headers
+```
+Heap Memory:
+┌────────┬─────────┬────────┬─────────┐
+│ Header │  Data   │ Header │  Free   │
+│ size=8 │ (8 B)   │ size=16│ (16 B)  │
+│ alloc=1│         │ alloc=0│         │
+└────────┴─────────┴────────┴─────────┘
+```
+
+### Practice Questions with Answers
+
+**Q1: Free blocks: 20B, 35B, 50B. Request 30B. What block is chosen by Best Fit? First Fit? Worst Fit?**
+
+**Answer:**
+- **Best Fit**: 35B (smallest that fits)
+- **First Fit**: 35B (first in list that fits)
+- **Worst Fit**: 50B (largest block)
+
+**Q2: Heap has blocks: [100B free][50B used][60B free][80B free]. After coalescing, what does it look like?**
+
+**Answer:**
+```
+Before: [100 free][50 used][60 free][80 free]
+After:  [100 free][50 used][140 free]
+          ↑ (not merged - separated by used block)
+                          ↑ (60+80 merged!)
+```
+Can't merge 100 with 60 because 50-byte used block separates them.
+
+**Q3: A memory allocator has a free list of [10B, 25B, 40B]. Request 12B using First Fit. Show result after split.**
+
+**Answer:**
+- First Fit finds 25B (first block ≥12B)
+- Split: allocate 12B, remainder = 25-12 = 13B
+- **Result**: [10B free][12B used][13B free][40B free]
+
+**Q4: Why is external fragmentation a problem even when total free space is large?**
+
+**Answer:** External fragmentation creates many small, non-contiguous free blocks. Even if their total size is 100KB, you can't satisfy a 50KB request if the largest contiguous block is only 10KB. Memory is fragmented into unusable pieces.
+
+**Q5: Free list: [30B][10B][25B][40B]. Request 15B using Best Fit. Then request 8B using First Fit. Show final state.**
+
+**Answer:**
+Step 1 (15B, Best Fit):
+- Best fit is 25B (smallest ≥15B)
+- After: [30B free][10B free][15B used][10B free][40B free]
+
+Step 2 (8B, First Fit):
+- First fit is first 30B block
+- After: [8B used][22B free][10B free][15B used][10B free][40B free]
+
+**Q6: What is the purpose of the header in each allocated block?**
+
+**Answer:** The header stores metadata:
+- **Size** of the block (needed for free() to know how much to free)
+- **Allocation status** (allocated or free)
+- Optional: pointers to next/prev free blocks (for free list)
+When user calls free(ptr), the allocator reads the header just before ptr to find the size.
+
+**Q7: Calculate: If header=8 bytes and user requests 24 bytes, how much total space is allocated?**
+
+**Answer:**
+- Header: 8 bytes
+- User data: 24 bytes
+- **Total: 32 bytes** allocated from heap
+
