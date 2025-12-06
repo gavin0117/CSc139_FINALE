@@ -181,3 +181,88 @@
 
 20. What happens on boot with respect to trap handlers and timer interrupts?
 
+---
+
+## Chapter 7 & 8: Scheduling
+
+### Key Scheduling Algorithms
+
+**FIFO (First In First Out)**: Run jobs in order of arrival
+**SJF (Shortest Job First)**: Run shortest job first (non-preemptive)
+**STCF (Shortest Time-to-Completion First)**: Preemptive SJF
+**Round Robin (RR)**: Time slice each job in turns
+**MLFQ (Multi-Level Feedback Queue)**: Multiple queues with different priorities
+
+### Key Metrics
+- **Turnaround Time**: T_completion - T_arrival
+- **Response Time**: T_first_run - T_arrival
+- **Average**: Sum of all times / number of jobs
+
+### Visual: Process Scheduling Timeline
+```
+Jobs: A(100ms), B(10ms), C(10ms) all arrive at t=0
+
+FIFO:     |----A----|B|C|
+          0        100 110 120
+Avg Turnaround: (100+110+120)/3 = 110ms
+
+SJF:      |B|C|----A----|
+          0 10 20      120
+Avg Turnaround: (10+20+120)/3 = 50ms
+
+Round Robin (time slice=10):
+|A|B|C|A|A|A|A|A|A|A|A|A|
+Avg Response: (0+10+20)/3 = 10ms
+```
+
+### Practice Questions with Answers
+
+**Q1: Given jobs A(50ms), B(30ms), C(20ms) arriving at t=0, calculate average turnaround time for SJF.**
+
+**Answer:**
+- Run order: C, B, A
+- C completes at 20ms (turnaround = 20)
+- B completes at 50ms (turnaround = 50)
+- A completes at 100ms (turnaround = 100)
+- Average = (20+50+100)/3 = **56.67ms**
+
+**Q2: What problem does STCF solve that SJF cannot handle?**
+
+**Answer:** STCF is preemptive, so when a shorter job arrives, it can preempt the currently running job. SJF is non-preemptive and must wait for the current job to finish, leading to convoy effect when short jobs arrive after a long job has started.
+
+**Q3: Jobs A(100ms) arrives at t=0, B(10ms) arrives at t=10. Calculate average turnaround for FIFO vs STCF.**
+
+**Answer:**
+- **FIFO:** A finishes at 100, B finishes at 110
+  - Avg turnaround = ((100-0)+(110-10))/2 = (100+100)/2 = **100ms**
+- **STCF:** B preempts A at t=10, finishes at t=20, A finishes at t=120
+  - Avg turnaround = ((120-0)+(20-10))/2 = (120+10)/2 = **65ms**
+
+**Q4: Why is Round Robin bad for turnaround time but good for response time?**
+
+**Answer:** RR gives every job a quick time slice, so all jobs start running quickly (good response time). However, jobs take longer to complete because they're constantly being switched out, increasing turnaround time. The overhead of context switching also adds to completion time.
+
+**Q5: In MLFQ, why do we periodically boost all jobs to the highest priority queue?**
+
+**Answer:** To prevent starvation of long-running jobs and to handle jobs that change behavior (e.g., from CPU-bound to interactive). Without boosting, a job that used up its time slices early would stay in low-priority queues forever, even if it becomes interactive later.
+
+**Q6: Three jobs arrive: A at t=0 (runtime=30), B at t=5 (runtime=20), C at t=10 (runtime=10). Using RR with time slice=10, when does each job complete?**
+
+**Answer:**
+```
+Timeline:
+0-10: A runs (20 left)
+10-20: B runs (10 left)
+20-30: C runs (done at 30)
+30-40: A runs (10 left)
+40-50: B runs (done at 50)
+50-60: A runs (done at 60)
+```
+- C completes at **30ms**
+- B completes at **50ms**
+- A completes at **60ms**
+
+**Q7: What is the convoy effect and which algorithm suffers from it?**
+
+**Answer:** Convoy effect occurs when short jobs get stuck behind a long job, like cars stuck behind a slow truck. **FIFO** suffers from this because if a long job arrives first, all subsequent short jobs must wait for it to complete, even though running the short jobs first would minimize average turnaround time.
+
