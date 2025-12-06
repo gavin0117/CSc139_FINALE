@@ -344,3 +344,89 @@ Result: A runs 3 times, B runs 2 times (A has 2× tickets, runs ~2× more)
 - B: 25/100 = 25% → approximately **25 time slices**
 - Stride scheduling guarantees this proportion deterministically
 
+---
+
+## Chapter 13: Address Spaces
+
+### Evolution of Memory Models
+
+1. **No Abstraction**: One program directly uses physical memory
+2. **Time Sharing**: OS switches processes in/out of memory (slow)
+3. **Address Space**: Each process has its own virtual memory view
+
+### Address Space Structure
+```
+Virtual Memory Layout:
+0KB   ┌──────────────┐
+      │   Code       │  (Program instructions)
+      ├──────────────┤
+      │   Heap       │  (malloc data, grows DOWN→)
+      │      ↓       │
+      │              │
+      │      ↑       │
+      │   Stack      │  (local vars, grows UP←)
+16KB  └──────────────┘
+```
+
+### Key Concepts
+- **Virtual Address**: What program sees (0KB to 16KB)
+- **Physical Address**: Actual location in RAM
+- **Address Translation**: Hardware+OS maps virtual → physical
+- **Isolation**: Each process thinks it owns all memory (0 to max)
+
+### Practice Questions with Answers
+
+**Q1: Why do we need address spaces instead of letting programs use physical memory directly?**
+
+**Answer:**
+- **Isolation**: Prevents processes from accessing each other's memory (security/stability)
+- **Ease of use**: Program doesn't need to know where in physical RAM it will run
+- **Flexibility**: OS can move process in memory, swap to disk, without program knowing
+- **Protection**: OS can enforce read-only code sections, prevent stack overflows into heap
+
+**Q2: A process has virtual addresses 0-16KB. Its code is at physical address 32KB. What physical address corresponds to virtual address 4KB?**
+
+**Answer:**
+- Base physical address = 32KB
+- Virtual address = 4KB
+- Physical address = 32KB + 4KB = **36KB**
+- This assumes simple base-and-bounds relocation
+
+**Q3: What are the three segments typically in an address space and why are stack and heap at opposite ends?**
+
+**Answer:**
+- **Code**: Program instructions (static size)
+- **Heap**: Dynamic allocation (malloc), grows downward
+- **Stack**: Function calls, local variables, grows upward
+- They're at opposite ends so both can grow without immediately colliding. This maximizes usable space before needing more memory.
+
+**Q4: In early time-sharing systems without address spaces, how did the OS switch between processes?**
+
+**Answer:** The OS would save the entire process memory to disk, load the next process's memory from disk into RAM, then run it. This was extremely slow due to I/O overhead, making multiprogramming inefficient.
+
+**Q5: What does the OS need to set up when creating a process's address space?**
+
+**Answer:**
+- Allocate physical memory for code, heap, and stack
+- Load program code and static data from disk
+- Set up page table or segmentation registers for address translation
+- Initialize heap and stack regions
+- Mark memory regions with permissions (code=read/execute, heap/stack=read/write)
+
+**Q6: Draw the address space for a process where code=4KB, heap currently=2KB, stack currently=2KB, total space=16KB.**
+
+**Answer:**
+```
+0KB   ┌──────────────┐
+      │   Code (4KB) │
+4KB   ├──────────────┤
+      │   Heap (2KB) │
+6KB   ├──────────────┤
+      │              │
+      │   (free)     │
+      │              │
+14KB  ├──────────────┤
+      │  Stack (2KB) │
+16KB  └──────────────┘
+```
+
