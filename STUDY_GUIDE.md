@@ -908,3 +908,144 @@ T1: load(0) → T2: load(0) → T1: inc(1) → T1: store(1) → T2: inc(1) → T
 - **pthread_join()**: Wait for a thread to complete
 - **pthread_exit()**: Terminate calling thread (or just return from thread function)
 
+---
+
+## Chapters 28/29: Locks
+
+### Lock Basics
+```c
+lock_t mutex;
+lock(&mutex);
+// critical section
+unlock(&mutex);
+```
+
+### Properties of Locks
+- **Mutual exclusion**: Only one thread in critical section
+- **Fairness**: Each thread eventually gets the lock
+- **Performance**: Low overhead
+
+### Atomic Instructions
+
+**Test-and-Set**: Atomically read old value and set to 1
+```c
+int TestAndSet(int *ptr) {
+    int old = *ptr;
+    *ptr = 1;
+    return old;  // returns 0 if lock was free
+}
+```
+
+**Fetch-and-Add**: Atomically increment and return old value
+```c
+int FetchAndAdd(int *ptr) {
+    int old = *ptr;
+    *ptr = old + 1;
+    return old;
+}
+```
+
+### Spin Lock vs Sleep Lock
+- **Spin lock**: Waste CPU cycles waiting (busy-waiting)
+- **Sleep lock**: Yield CPU, OS wakes when lock available (efficient)
+
+### Practice Questions with Answers
+
+**Q1: Analyze this code for race conditions:**
+```c
+int balance = 0;
+void deposit(int amt) {
+    balance = balance + amt;
+}
+// Two threads call deposit(10) simultaneously
+```
+
+**Answer:**
+**Race condition exists!** balance = balance + amt is 3 operations:
+1. load balance → register
+2. add amt → register
+3. store register → balance
+
+Interleaving:
+```
+T1: load(0) → T2: load(0) → T1: add(10) → T1: store(10) → T2: add(10) → T2: store(10)
+Final balance: 10 (WRONG! Should be 20)
+```
+**Fix:** Wrap critical section in lock/unlock.
+
+**Q2: Does this lock implementation work correctly?**
+```c
+typedef struct { int flag; } lock_t;
+void lock(lock_t *lock) {
+    while (lock->flag == 1);  // spin
+    lock->flag = 1;
+}
+void unlock(lock_t *lock) {
+    lock->flag = 0;
+}
+```
+
+**Answer:**
+**NO! Race condition in lock() itself!** Two threads can both see flag==0, both exit while loop, both set flag=1, both enter critical section. Needs atomic test-and-set.
+
+**Q3: Implement a simple spin lock using Test-and-Set.**
+
+**Answer:**
+```c
+typedef struct { int flag; } lock_t;
+
+void lock(lock_t *lock) {
+    while (TestAndSet(&lock->flag) == 1)
+        ; // spin until we get 0 (lock was free)
+}
+
+void unlock(lock_t *lock) {
+    lock->flag = 0;
+}
+```
+
+**Q4: What's the difference between Test-and-Set and Fetch-and-Add?**
+
+**Answer:**
+- **Test-and-Set**: Sets value to 1, returns old value. Used for simple spin locks (0=free, 1=held). Not fair (any waiting thread can grab it).
+- **Fetch-and-Add**: Increments value, returns old value. Used for ticket locks (fair FIFO ordering). Each thread gets a ticket number.
+
+**Q5: Analyze this concurrent linked list insert for race conditions:**
+```c
+void insert(int value) {
+    node *n = malloc(sizeof(node));
+    n->value = value;
+    n->next = head;
+    head = n;
+}
+```
+
+**Answer:**
+**Race condition!** If two threads execute simultaneously:
+```
+T1: n1->next = head (A)
+T2: n2->next = head (A)  // Both see same head!
+T1: head = n1
+T2: head = n2  // Overwrites! n1 is lost
+```
+**Fix:** Protect entire critical section (lines 3-4) with lock.
+
+**Q6: Why is spinning wasteful, and when is it acceptable?**
+
+**Answer:**
+- **Wasteful**: Thread consumes CPU cycles checking lock repeatedly instead of doing useful work
+- **Acceptable when**:
+  - Critical section is very short (lock held briefly)
+  - Number of CPUs ≥ number of threads (spinning thread doesn't prevent lock holder from running)
+  - Real-time systems where waking from sleep is too slow
+
+**Q7: Explain how a ticket lock using Fetch-and-Add provides fairness.**
+
+**Answer:**
+```c
+lock: ticket = FetchAndAdd(&lock->ticket);
+      while (lock->turn != ticket);
+unlock: lock->turn++;
+```
+Each thread gets a unique ticket number (FIFO). Lock serves threads in ticket order, preventing starvation. Unlike Test-and-Set where any thread can steal the lock.
+
