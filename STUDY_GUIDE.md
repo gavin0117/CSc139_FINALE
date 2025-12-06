@@ -720,3 +720,109 @@ When user calls free(ptr), the allocator reads the header just before ptr to fin
 - User data: 24 bytes
 - **Total: 32 bytes** allocated from heap
 
+---
+
+## Chapters 18/19/20: Paging
+
+### Core Concept
+- Divide address space into fixed-size **pages** (virtual)
+- Divide physical memory into fixed-size **page frames** (physical)
+- Page size = Frame size (typically 4KB)
+
+### Address Translation
+```
+Virtual Address = [VPN | Offset]
+                   ↓
+              Page Table (indexed by VPN)
+                   ↓
+              [PFN | Offset] = Physical Address
+```
+
+### Calculations
+- **# Virtual Pages** = Virtual Address Space Size / Page Size
+- **# Physical Frames** = Physical Memory Size / Page Size
+- **VPN bits** = log₂(# virtual pages)
+- **PFN bits** = log₂(# physical frames)
+- **Offset bits** = log₂(page size)
+
+### TLB (Translation Lookaside Buffer)
+- **Hardware cache** of recent VPN→PFN translations
+- **TLB Hit**: Translation in TLB (fast, no memory access)
+- **TLB Miss**: Must walk page table in memory (slow)
+- **Hit Rate** = Hits / (Hits + Misses)
+
+### Visual: Paging
+```
+Virtual Address: [VPN=2][Offset=100]
+                     ↓
+Page Table:    [0→5][1→3][2→7][3→2]
+                            ↓
+Physical Address: [PFN=7][Offset=100]
+
+Physical Memory:
+Frame 0: [...]
+Frame 1: [...]
+...
+Frame 7: [page 2's data] ← our access at offset 100
+```
+
+### Hardware vs Software
+- **RISC (Software TLB)**: TLB miss → trap to OS handler (software walks page table)
+- **CISC (Hardware TLB)**: TLB miss → hardware walks page table automatically
+
+### Practice Questions with Answers
+
+**Q1: 32-bit virtual address space, 16GB physical memory, 4KB pages. Calculate VPN bits, PFN bits, offset bits.**
+
+**Answer:**
+- Page size = 4KB = 2^12 → **Offset = 12 bits**
+- Virtual space = 2^32 bytes → # pages = 2^32 / 2^12 = 2^20 → **VPN = 20 bits**
+- Physical = 16GB = 2^34 bytes → # frames = 2^34 / 2^12 = 2^22 → **PFN = 22 bits**
+
+**Q2: TLB has 100 hits and 20 misses. Calculate hit rate.**
+
+**Answer:**
+- Total accesses = 100 + 20 = 120
+- Hit rate = 100/120 = **83.3%**
+
+**Q3: Page table for process: VPN 0→PFN 4, VPN 1→PFN 7, VPN 2→PFN 1. Page size=1KB. Translate virtual address 1200.**
+
+**Answer:**
+- 1200 bytes = 1KB + 176 bytes
+- VPN = 1200 / 1024 = **1**, Offset = 1200 % 1024 = **176**
+- Page table: VPN 1 → PFN 7
+- Physical = (7 × 1024) + 176 = 7168 + 176 = **7344**
+
+**Q4: Why do we need a TLB? What problem does it solve?**
+
+**Answer:** Without TLB, every memory access requires two memory accesses: one to read the page table entry, one to access actual data. This doubles memory access time. TLB caches recent translations so most accesses only require one memory access (on TLB hit), dramatically improving performance.
+
+**Q5: 64-entry TLB, 4KB pages. Program accesses addresses 0, 4096, 8192, 4096, 0. Assume empty TLB initially. How many hits/misses?**
+
+**Answer:**
+```
+Access 0 (VPN=0): Miss → load VPN 0 into TLB
+Access 4096 (VPN=1): Miss → load VPN 1 into TLB
+Access 8192 (VPN=2): Miss → load VPN 2 into TLB
+Access 4096 (VPN=1): Hit (VPN 1 in TLB)
+Access 0 (VPN=0): Hit (VPN 0 in TLB)
+```
+**3 misses, 2 hits**
+
+**Q6: What's the difference between hardware-managed and software-managed TLBs?**
+
+**Answer:**
+- **Hardware-managed (CISC/x86)**: On TLB miss, hardware automatically walks page table in memory, loads PTE into TLB
+- **Software-managed (RISC)**: On TLB miss, hardware raises exception to OS, OS handler walks page table, loads TLB, returns
+- Hardware is faster, software is more flexible
+
+**Q7: 16-bit addresses, 256-byte pages. How much memory must be allocated for a linear page table?**
+
+**Answer:**
+- Address space = 2^16 = 64KB
+- Page size = 256 bytes = 2^8
+- # pages = 64KB / 256B = 256 pages
+- Each PTE typically ~4 bytes
+- **Page table size = 256 × 4 = 1024 bytes = 1KB**
+(This is the minimum required memory for the page table)
+
