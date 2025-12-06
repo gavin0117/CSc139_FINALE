@@ -42,3 +42,63 @@
 
 10. A process completes an I/O operation. What state is it in before completion? After completion?
 
+---
+
+## Chapter 5: The Process API
+
+### Key System Calls
+- **fork()**: Creates a new child process (copy of parent)
+- **exec()**: Transforms calling process into a different program
+- **wait()**: Parent waits for child to complete
+- **kill()**: Send signals to processes
+- **signal()**: Set up signal handlers
+
+### fork() Behavior
+- Returns **0** to child process
+- Returns **child's PID** to parent
+- Returns **-1** on failure
+- Child gets copy of parent's address space
+
+### exec() Family
+- Loads new program into current process
+- Does NOT create new process
+- Does NOT return on success (old program is gone)
+- Common variants: execl(), execle(), execv(), execvp()
+
+### Practice Questions
+
+1. What does fork() return to the parent process? To the child?
+
+2. After fork(), how many processes are running? What is the relationship between them?
+
+3. Why would you call fork() followed by exec()?
+
+4. Write the typical pattern: parent forks a child, child runs `/bin/ls`, parent waits for completion.
+
+5. What happens if you call exec() without fork() first?
+
+6. If fork() fails, what value does it return and why might it fail?
+
+7. What is the purpose of wait() or waitpid()?
+
+8. If a parent doesn't call wait() on its child, what problem can occur?
+
+9. What happens to open file descriptors after fork()?
+
+10. Explain the output when this code runs:
+    ```c
+    printf("A");
+    fork();
+    printf("B");
+    ```
+
+11. What is a zombie process?
+
+12. What is an orphan process?
+
+13. How does the shell use fork() and exec() to run commands?
+
+14. Can a child process affect the parent's variables after fork()?
+
+15. What signal does kill() send by default?
+
