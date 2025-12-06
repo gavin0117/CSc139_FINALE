@@ -430,3 +430,104 @@ Virtual Memory Layout:
 16KB  └──────────────┘
 ```
 
+---
+
+## Chapter 15: Address Translation
+
+### Base and Bounds (Dynamic Relocation)
+
+**Hardware Registers (per-CPU):**
+- **Base register**: Start of physical memory for process
+- **Bounds register**: Size of address space
+
+**Translation Formula:**
+```
+physical_address = virtual_address + base
+if (virtual_address >= bounds) → EXCEPTION (segmentation fault)
+```
+
+### Visual: Address Translation
+```
+Virtual Address Space (Process view):
+0KB   ┌──────────┐
+      │   Code   │
+      │   Heap   │
+      │   Stack  │
+16KB  └──────────┘
+
+              ↓ Translation (base=32KB)
+
+Physical Memory (actual RAM):
+0KB   ┌──────────┐
+      │  OS      │
+32KB  ├──────────┤  ← Base register points here
+      │ Process  │
+      │  Code    │
+      │  Heap    │
+      │  Stack   │
+48KB  └──────────┘  ← Base + Bounds
+```
+
+### Hardware vs OS Responsibilities
+
+**Hardware (MMU):**
+- Performs translation on every memory access
+- Checks bounds on every access
+- Raises exception if out of bounds
+
+**OS:**
+- Sets base/bounds registers during context switch
+- Handles exceptions (e.g., kills process on seg fault)
+- Manages free memory (which physical regions are free)
+
+### Practice Questions with Answers
+
+**Q1: Base=32KB, Bounds=16KB. Translate virtual addresses: (a) 0KB, (b) 4KB, (c) 20KB**
+
+**Answer:**
+- (a) 0KB: Physical = 0 + 32KB = **32KB** ✓
+- (b) 4KB: Physical = 4KB + 32KB = **36KB** ✓
+- (c) 20KB: 20KB >= 16KB bounds → **EXCEPTION (out of bounds)** ✗
+
+**Q2: A process tries to access virtual address 8000. Base=16384, Bounds=16384. What happens?**
+
+**Answer:**
+- Check bounds: 8000 < 16384 ✓ (within bounds)
+- Physical address = 8000 + 16384 = **24384**
+- Access succeeds at physical address 24384
+
+**Q3: What happens during a context switch with respect to base and bounds registers?**
+
+**Answer:**
+1. OS saves current process's base and bounds to its PCB
+2. OS loads next process's base and bounds from its PCB into hardware registers
+3. Now all address translations use new process's base/bounds
+4. This happens in **kernel mode** (privileged operation)
+
+**Q4: Why must base and bounds registers be privileged (kernel-mode only)?**
+
+**Answer:** If user programs could modify base/bounds, they could change their address translation to access any physical memory, including other processes' memory or OS memory. This would break isolation and security.
+
+**Q5: In x86, what is the role of registers like eax, ebx, esp?**
+
+**Answer:**
+- **eax, ebx, ecx, edx**: General-purpose registers for computation
+- **esp**: Stack pointer (points to top of stack)
+- **ebp**: Base pointer (stack frame base)
+- **eip**: Instruction pointer (program counter)
+These contain virtual addresses that get translated by the MMU.
+
+**Q6: Given 16-bit virtual addresses and base=40000, what is the maximum physical address this process can access?**
+
+**Answer:**
+- 16-bit address space = 2^16 = 65536 bytes = 64KB
+- Max virtual address = 64KB - 1
+- Max physical address = (64KB - 1) + 40000 = **105535** (or ~103KB)
+
+**Q7: Why is this called "dynamic relocation" instead of "static relocation"?**
+
+**Answer:**
+- **Static relocation**: Rewrite program's addresses when loaded (done once by loader)
+- **Dynamic relocation**: Translate addresses at runtime using hardware registers
+- Dynamic is better because the process can be moved in physical memory (just change base register) without modifying the program itself.
+
