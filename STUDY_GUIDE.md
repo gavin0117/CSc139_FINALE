@@ -826,3 +826,85 @@ Access 0 (VPN=0): Hit (VPN 0 in TLB)
 - **Page table size = 256 × 4 = 1024 bytes = 1KB**
 (This is the minimum required memory for the page table)
 
+---
+
+## Chapters 26/27: Introduction to Concurrency
+
+### Why Concurrency?
+- **Parallelism**: Use multiple CPUs simultaneously
+- **Avoid blocking**: One thread waits for I/O, another runs
+- **Better structure**: Separate concerns (e.g., UI thread + worker thread)
+
+### Thread vs Process
+- **Process**: Own address space, heavy context switch
+- **Thread**: Share address space, light context switch
+- Threads share: code, heap, globals
+- Threads private: stack, registers
+
+### The Problem: Race Conditions
+- **Race condition**: Outcome depends on execution timing
+- Occurs when multiple threads access shared data without synchronization
+- **Critical section**: Code that accesses shared resource
+
+### Visual: Thread Memory Layout
+```
+Process Address Space:
+┌──────────────┐
+│    Code      │ ← Shared by all threads
+├──────────────┤
+│    Heap      │ ← Shared
+├──────────────┤
+│  Thread 1    │ ← Private stack
+│   Stack      │
+├──────────────┤
+│  Thread 2    │ ← Private stack
+│   Stack      │
+└──────────────┘
+```
+
+### Practice Questions with Answers
+
+**Q1: What is the difference between a process and a thread?**
+
+**Answer:**
+- **Process**: Separate address space, own page table, heavy context switch, isolated
+- **Thread**: Shares address space with other threads in same process, own stack/registers, light context switch, can directly access shared memory
+- Switching threads in same process doesn't require changing page tables (fast)
+
+**Q2: Two threads execute count++ (where count=0 initially). Each runs once. What are possible final values?**
+
+**Answer:**
+count++ compiles to: load→increment→store
+
+Possible interleavings:
+```
+T1: load(0) → T1: inc(1) → T1: store(1) → T2: load(1) → T2: inc(2) → T2: store(2) = 2
+T1: load(0) → T2: load(0) → T1: inc(1) → T1: store(1) → T2: inc(1) → T2: store(1) = 1
+```
+**Possible values: 1 or 2** (2 is correct, 1 is the race condition bug)
+
+**Q3: What is a critical section?**
+
+**Answer:** A critical section is a piece of code that accesses a shared resource (variable, data structure, file, etc.) that must not be concurrently accessed by multiple threads. Only one thread should execute the critical section at a time to avoid race conditions.
+
+**Q4: Why are threads lighter weight than processes?**
+
+**Answer:**
+- Threads share the same address space (no need to switch page tables)
+- Less state to save/restore during context switch
+- Communication between threads is easier (shared memory vs IPC)
+- Creating a thread is faster than forking a process (no copying address space)
+
+**Q5: What parts of memory do threads share vs have private?**
+
+**Answer:**
+- **Shared**: Code, heap (malloc'd data), global variables, open file descriptors
+- **Private**: Stack, registers (PC, SP, etc.), thread-local storage
+
+**Q6: Name the three basic threading API functions.**
+
+**Answer:**
+- **pthread_create()**: Create a new thread
+- **pthread_join()**: Wait for a thread to complete
+- **pthread_exit()**: Terminate calling thread (or just return from thread function)
+
