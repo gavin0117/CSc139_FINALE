@@ -531,3 +531,93 @@ These contain virtual addresses that get translated by the MMU.
 - **Dynamic relocation**: Translate addresses at runtime using hardware registers
 - Dynamic is better because the process can be moved in physical memory (just change base register) without modifying the program itself.
 
+---
+
+## Chapter 16: Segmentation
+
+### Problem with Base & Bounds
+- Wastes memory (internal fragmentation)
+- If heap and stack are small, large gap between them is unused but still allocated
+
+### Segmentation = Generalized Base & Bounds
+- Separate base & bounds for each **segment** (code, heap, stack)
+- Each segment can be placed independently in physical memory
+
+### Segment Registers (per-process)
+```
+Segment   Base    Bounds   Grows
+Code      32KB    2KB      —
+Heap      34KB    3KB      Positive
+Stack     28KB    2KB      Negative (!)
+```
+
+### Address Translation with Segmentation
+```
+1. Extract segment from virtual address (top 2 bits)
+2. Extract offset within segment (remaining bits)
+3. Check: offset < bounds? (account for growth direction)
+4. Physical address = base[segment] + offset
+```
+
+### Visual: Segmentation
+```
+Virtual Address Space:          Physical Memory:
+┌─────────────┐                ┌─────────────┐ 0KB
+│ Code  (2KB) │ ───────┐      │   OS        │
+├─────────────┤        │      ├─────────────┤ 16KB
+│ Heap  (3KB) │ ────┐  └─────→│ Code  (2KB) │ 32KB
+├─────────────┤     │         ├─────────────┤ 34KB
+│   (free)    │     └────────→│ Heap  (3KB) │
+├─────────────┤               ├─────────────┤ 37KB
+│ Stack (2KB) │ ──────┐       │   (free)    │
+└─────────────┘       │       ├─────────────┤ 26KB
+                      └──────→│ Stack (2KB) │ 28KB
+                              └─────────────┘
+```
+
+### Per-Process vs Common to All
+- **Per-process**: Segment registers (base/bounds), page tables
+- **Common**: OS code, trap handlers, free memory lists, CPU
+
+### Practice Questions with Answers
+
+**Q1: Virtual address is 14-bits: [1 0|0 1 0 0 0 0 0 0 0 0 0 0]. Segment bits are top 2. What segment and offset?**
+
+**Answer:**
+- Top 2 bits: **10** = segment 2 (stack, if 00=code, 01=heap, 10=stack)
+- Remaining 12 bits = 01000000000 = **1024** (offset)
+- So: Stack segment, offset 1024
+
+**Q2: Code base=32KB, bounds=2KB. Heap base=34KB, bounds=3KB. Translate virtual address in heap segment with offset 1KB.**
+
+**Answer:**
+- Segment: Heap
+- Check bounds: 1KB < 3KB ✓
+- Physical = 34KB + 1KB = **35KB**
+
+**Q3: Stack grows negative. Stack base=28KB, bounds=2KB, max segment size=4KB. Virtual offset=3KB. What's the physical address?**
+
+**Answer:**
+- Negative growth: actual offset = max_size - virtual_offset = 4KB - 3KB = 1KB
+- Check: 1KB < 2KB bounds ✓
+- Physical = 28KB - 1KB = **27KB**
+(Or: base points to bottom, so base - (max_segment - offset))
+
+**Q4: What happens on a context switch with segmentation?**
+
+**Answer:**
+1. OS saves current process's segment registers (3 base + 3 bounds) to PCB
+2. OS restores next process's segment registers from its PCB into hardware
+3. All address translations now use new process's segments
+4. This is privileged (kernel mode only)
+
+**Q5: Why is segmentation better than simple base-and-bounds for memory efficiency?**
+
+**Answer:** With base-and-bounds, the entire address space (including the large free gap between heap and stack) must be contiguous in physical memory. Segmentation places each segment separately, so the gap doesn't consume physical memory. Only actually used segments (code, heap, stack) take physical space.
+
+**Q6: What data structures must be per-process vs shared among all processes?**
+
+**Answer:**
+- **Per-process**: Segment registers, page tables, PCB, register state, address space
+- **Shared/Global**: OS code, physical memory allocator, device drivers, CPU hardware, trap table
+
