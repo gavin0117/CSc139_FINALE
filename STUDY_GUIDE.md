@@ -4,21 +4,34 @@
 
 ### Key Terms & Definitions
 - **Process**: A running program; the OS abstraction for execution
-- **Program**: Static code and data on disk
-- **Address Space**: Memory the process can access (code, stack, heap)
-- **Process API**: Create, destroy, wait, control, status operations
-- **Machine State**: What a program can read/update (memory, registers, PC, stack pointer, frame pointer)
+- **Program**: Lifeless bytes on disk (instructions + static data) waiting to run
+- **Address Space**: Memory the process can address (code, stack, heap)
+- **Machine State**: What a program can read/update when running:
+  - **Memory** (address space)
+  - **Registers** (PC/instruction pointer, stack pointer, frame pointer, general-purpose)
+  - **I/O information** (list of open files)
+- **Time Sharing**: OS shares CPU by running one process, stopping it, running another
+- **PCB (Process Control Block)**: Data structure storing process information
+
+### Process Creation Steps
+1. **Load** code and static data from disk into memory (eager or lazy)
+2. **Allocate** run-time stack (with argc/argv for main())
+3. **Allocate** heap (small initially, grows via malloc())
+4. **I/O setup**: Open 3 file descriptors (stdin, stdout, stderr)
+5. **Jump to main()**: Start program execution
 
 ### Process States
-1. **Running**: Executing on CPU
+1. **Running**: Executing instructions on CPU
 2. **Ready**: Ready to run but OS chose not to run it
-3. **Blocked**: Not ready (e.g., waiting for I/O)
+3. **Blocked**: Not ready until event occurs (e.g., waiting for I/O)
+4. **Embryo** (initial): Being created
+5. **Zombie** (final): Exited but not cleaned up; parent can check return code
 
 ### State Transitions
 - Ready → Running: **Scheduled**
 - Running → Ready: **Descheduled**
-- Running → Blocked: **I/O initiated**
-- Blocked → Ready: **I/O completion**
+- Running → Blocked: **I/O: initiate**
+- Blocked → Ready: **I/O: done**
 
 ### Practice Questions
 
