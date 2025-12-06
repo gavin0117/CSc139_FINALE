@@ -1049,3 +1049,139 @@ unlock: lock->turn++;
 ```
 Each thread gets a unique ticket number (FIFO). Lock serves threads in ticket order, preventing starvation. Unlike Test-and-Set where any thread can steal the lock.
 
+---
+
+## Chapter 30: Condition Variables
+
+### Purpose
+- Allow threads to **wait** for a condition to become true
+- Avoids wasteful spinning to check a condition
+
+### API
+```c
+pthread_cond_wait(cond_t *c, mutex_t *m);   // Release lock, sleep, reacquire lock
+pthread_cond_signal(cond_t *c);             // Wake one waiting thread
+pthread_cond_broadcast(cond_t *c);          // Wake all waiting threads
+```
+
+### Bounded Buffer (Producer/Consumer)
+```c
+int buffer[MAX], fill = 0, use = 0, count = 0;
+cond_t empty, fill_cv;
+mutex_t mutex;
+
+void put(int value) {
+    buffer[fill] = value;
+    fill = (fill + 1) % MAX;
+    count++;
+}
+
+int get() {
+    int tmp = buffer[use];
+    use = (use + 1) % MAX;
+    count--;
+    return tmp;
+}
+```
+
+### Producer/Consumer Pattern
+```c
+// Producer
+lock(&mutex);
+while (count == MAX)
+    wait(&empty, &mutex);  // buffer full, wait
+put(item);
+signal(&fill_cv);          // signal consumer
+unlock(&mutex);
+
+// Consumer
+lock(&mutex);
+while (count == 0)
+    wait(&fill_cv, &mutex); // buffer empty, wait
+item = get();
+signal(&empty);             // signal producer
+unlock(&mutex);
+```
+
+### Covering Condition
+- Use `broadcast()` instead of `signal()` when multiple threads might satisfy different conditions
+
+### Practice Questions with Answers
+
+**Q1: Why must wait() be called with the lock held?**
+
+**Answer:** To avoid lost wakeup problem. If we release lock before wait():
+```
+T1: check (count==0) → true
+[T2: put() → signal()] ← runs before T1 waits!
+T1: wait() ← misses signal, sleeps forever
+```
+wait() atomically releases lock and sleeps, preventing this race.
+
+**Q2: Why use `while` instead of `if` when checking condition before wait()?**
+
+**Answer:**
+- **Spurious wakeups**: Thread can wake up without signal (OS artifact)
+- **Mesa semantics**: Signaler doesn't guarantee condition still true when waiter runs (another thread might grab lock first and consume the resource)
+Must recheck condition after waking up.
+
+**Q3: Analyze this code for bugs:**
+```c
+lock(&m);
+if (count == 0)
+    wait(&c, &m);
+item = get();
+unlock(&m);
+```
+
+**Answer:**
+**Bug: using `if` instead of `while`!**
+- After wakeup, another thread might run first and consume item
+- When this thread gets lock, count might be 0 again
+- **Fix:** Change `if` to `while`
+
+**Q4: How does pthread_cond_wait work internally?**
+
+**Answer:**
+1. Atomically release the mutex
+2. Put thread to sleep (wait queue)
+3. When signaled, wake up
+4. Reacquire the mutex (may block here!)
+5. Return to caller
+
+**Q5: In bounded buffer, why do we need both `empty` and `fill_cv` condition variables?**
+
+**Answer:**
+- **empty**: Producers wait when buffer full
+- **fill_cv**: Consumers wait when buffer empty
+
+If we used one CV:
+- Producer signals when adding item → might wake another producer (wrong!)
+- Need separate CVs so producers wake consumers and vice versa
+
+**Q6: What is a covering condition and when do you use broadcast()?**
+
+**Answer:**
+- **Covering condition**: A condition that might satisfy multiple different waiting threads
+- Use `broadcast()` when you don't know which specific thread's condition is satisfied
+- Example: Memory allocator with threads waiting for different-sized blocks. When freeing memory, broadcast to wake all; each checks if their requested size is now available.
+
+**Q7: Fix this producer code:**
+```c
+lock(&m);
+put(item);
+signal(&c);
+unlock(&m);
+// Missing: check if buffer was full!
+```
+
+**Answer:**
+```c
+lock(&m);
+while (count == MAX)
+    wait(&empty, &m);  // Wait if full
+put(item);
+signal(&fill_cv);      // Wake consumer
+unlock(&m);
+```
+
