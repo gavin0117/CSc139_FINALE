@@ -266,3 +266,81 @@ Timeline:
 
 **Answer:** Convoy effect occurs when short jobs get stuck behind a long job, like cars stuck behind a slow truck. **FIFO** suffers from this because if a long job arrives first, all subsequent short jobs must wait for it to complete, even though running the short jobs first would minimize average turnaround time.
 
+---
+
+## Chapter 9: Stride Scheduling (Basics)
+
+### Core Concept
+**Proportional-share scheduling**: Each job gets a proportion of CPU time based on its **tickets**
+- More tickets = more CPU time
+- **Stride** = large number / tickets (e.g., 10000 / tickets)
+- Lower stride = runs more often
+
+### Algorithm
+1. Each process has a **pass value** (starts at 0)
+2. Pick process with lowest pass value
+3. Run it for a time slice
+4. Increment its pass value by its stride
+5. Repeat
+
+### Example Calculation
+```
+Process A: 100 tickets, stride = 10000/100 = 100
+Process B: 50 tickets,  stride = 10000/50 = 200
+Process C: 250 tickets, stride = 10000/250 = 40
+
+Initial: A=0, B=0, C=0
+Step 1: Run C (lowest), C=40
+Step 2: Run C, C=80
+Step 3: Run C, C=120
+Step 4: Run A, A=100
+Step 5: Run A, A=200
+Step 6: Run C, C=160
+```
+
+### Practice Questions with Answers
+
+**Q1: Three processes have tickets: A=200, B=100, C=100. What percentage of CPU does each get?**
+
+**Answer:**
+- Total tickets = 200+100+100 = 400
+- A gets: 200/400 = **50%**
+- B gets: 100/400 = **25%**
+- C gets: 100/400 = **25%**
+
+**Q2: Given stride=10000/tickets, calculate strides for A(100 tickets), B(200 tickets), C(50 tickets). Which runs most frequently?**
+
+**Answer:**
+- A: 10000/100 = **100**
+- B: 10000/200 = **50**
+- C: 10000/50 = **200**
+- **B runs most frequently** (smallest stride means pass value increases slowest, so it gets selected more often)
+
+**Q3: Why is stride scheduling deterministic while lottery scheduling is randomized?**
+
+**Answer:** Stride scheduling uses a deterministic algorithm (always pick lowest pass value) to achieve proportional sharing. Lottery scheduling randomly picks a ticket, which only achieves proportional sharing on average over many iterations. Stride provides more precise guarantees.
+
+**Q4: Two processes: A(100 tickets, stride=100), B(50 tickets, stride=200). Both start with pass=0. Show first 5 scheduling decisions.**
+
+**Answer:**
+```
+Initial: A=0, B=0
+1. Tie→pick A: A=100, B=0
+2. Run B: A=100, B=200
+3. Run A: A=200, B=200
+4. Tie→pick A: A=300, B=200
+5. Run B: A=300, B=400
+```
+Result: A runs 3 times, B runs 2 times (A has 2× tickets, runs ~2× more)
+
+**Q5: What problem occurs when a new process joins in stride scheduling?**
+
+**Answer:** The new process starts with pass=0, which is likely much lower than existing processes' pass values. This causes the new process to monopolize the CPU until its pass value catches up. Solution: set new process's pass to minimum of existing pass values.
+
+**Q6: Calculate: If A has 75 tickets and B has 25 tickets, after 100 time slices, approximately how many does each get?**
+
+**Answer:**
+- A: 75/100 = 75% → approximately **75 time slices**
+- B: 25/100 = 25% → approximately **25 time slices**
+- Stride scheduling guarantees this proportion deterministically
+
