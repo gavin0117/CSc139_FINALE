@@ -1505,3 +1505,102 @@ Retry loop instead of locks. Avoids deadlock entirely (breaks mutual exclusion c
 
 **Fix:** Establish total order (e.g., always L1→L2→L3), so all threads acquire in same sequence.
 
+---
+
+## Chapters 36-41: I/O and File Systems
+
+### Canonical I/O Device
+```
+Device Components:
+┌─────────────────┐
+│ Status Register │ ← Check if device ready/busy
+├─────────────────┤
+│Command Register │ ← Tell device what to do
+├─────────────────┤
+│  Data Register  │ ← Transfer data
+└─────────────────┘
+```
+
+### Interrupts vs Polling
+
+**Polling**: CPU repeatedly checks device status (wastes CPU cycles)
+```c
+while (STATUS == BUSY)
+    ; // spin
+```
+
+**Interrupts**: Device notifies CPU when done (efficient, but overhead per interrupt)
+- Use polling for fast devices
+- Use interrupts for slow devices (disk, network)
+
+### Disk Geometry
+- **Platter**: Circular disk surface
+- **Track**: Concentric circle on platter
+- **Sector**: Smallest unit (512 bytes or 4KB)
+- **Cylinder**: Same track across multiple platters
+- **Seek**: Move disk head to track (slow, ms)
+- **Rotation**: Wait for sector to rotate under head (medium)
+- **Transfer**: Read/write data (fast, μs)
+
+### Disk Scheduling Algorithms
+
+**FCFS**: First Come First Served (fair, but slow)
+**SSTF**: Shortest Seek Time First (greedy, can starve)
+**SCAN** (Elevator): Sweep back and forth across disk
+**C-SCAN**: Sweep one direction, jump back, repeat (more fair)
+
+### FFS (Fast File System) Basics
+- **Block groups**: Divide disk into groups
+- **Locality**: Keep related data close (same directory in same group)
+- **Large files**: Spread across groups to balance load
+
+### Practice Questions with Answers
+
+**Q1: When should you use interrupts vs polling?**
+
+**Answer:**
+- **Interrupts**: Slow devices (disk, network). CPU can do other work while waiting. Interrupt overhead is small compared to device latency.
+- **Polling**: Fast devices (some SSDs, fast network cards). If device is almost always ready, polling wastes less time than interrupt overhead.
+- **Rule of thumb**: If device time > cost of context switch, use interrupts.
+
+**Q2: Disk queue has requests for tracks: 53, 183, 37, 122, 14. Current track: 53. What order for SSTF?**
+
+**Answer:**
+Start at 53:
+- Closest: 37 (distance 16)
+- From 37, closest: 14 (distance 23)
+- From 14, closest: 122 (distance 108)
+- From 122, closest: 183 (distance 61)
+
+**Order: 53→37→14→122→183**
+
+**Q3: What are the three main components of a canonical I/O device?**
+
+**Answer:**
+1. **Status register**: Reports device state (ready, busy, error)
+2. **Command register**: CPU writes commands here (read, write, seek)
+3. **Data register**: Transfer data between device and CPU/memory
+
+**Q4: Calculate disk access time: seek=5ms, rotation=4ms average, transfer=0.1ms.**
+
+**Answer:**
+Total access time = Seek + Rotation + Transfer
+= 5ms + 4ms + 0.1ms = **9.1ms**
+
+(Seek is slowest component, which is why disk scheduling focuses on minimizing seeks)
+
+**Q5: What is the elevator (SCAN) algorithm and why is it better than SSTF?**
+
+**Answer:**
+- **SCAN**: Move disk head in one direction, servicing all requests, then reverse direction
+- **Better than SSTF** because SSTF can starve requests at disk edges (if requests keep coming for middle tracks)
+- SCAN guarantees all requests eventually serviced (fairness)
+- Like an elevator: services all floors while going up, then all while going down
+
+**Q6: In FFS, why keep files from the same directory in the same block group?**
+
+**Answer:**
+- **Locality**: Files in same directory often accessed together (e.g., ls, compiling source files)
+- Keeping them physically close minimizes seek time
+- Improves performance for common access patterns (listing directory, reading related files)
+
