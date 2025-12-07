@@ -1021,20 +1021,130 @@ Free structure: [8KB allocated][8KB free buddy][16KB free][32KB free]
 
 ---
 
-## Chapters 18/19/20: Paging
+## Chapter 18: Introduction to Paging
+
+### The Crux: How to Virtualize Memory with Pages
+
+**How can we virtualize memory with pages, so as to avoid the problems of segmentation? What are the basic techniques? How do we make those techniques work well, with minimal space and time overheads?**
 
 ### Core Concept
-- Divide address space into fixed-size **pages** (virtual)
-- Divide physical memory into fixed-size **page frames** (physical)
-- Page size = Frame size (typically 4KB)
 
-### Address Translation
+**Paging** - second approach to space management (from **Atlas system**, early 1960s):
+- Chop space into **fixed-sized pieces** (not variable-sized like segmentation)
+- Divide address space into fixed-size **pages** (virtual memory)
+- Divide physical memory into fixed-size **page frames** (physical memory)
+- Page size = Frame size (typically 4KB)
+- Each frame can contain exactly one virtual page
+
+### Advantages Over Segmentation
+
+1. **No external fragmentation**:
+   - Fixed-size units mean any page can fit in any free frame
+   - No need to worry about fragmentation of free space
+
+2. **Flexibility**:
+   - Support sparse address spaces easily
+   - No assumptions about heap/stack growth direction
+   - Process can use address space however it wants
+
+### Page Table
+
+**Per-process data structure** that stores address translations:
+- Maps virtual page numbers (VPN) to physical frame numbers (PFN)
+- **One page table per process** in the system
+- **Linear page table** = simple array structure
+  - OS indexes array by VPN
+  - Looks up page table entry (PTE) at that index
+  - Extracts PFN from the PTE
+
+**Where stored**:
+- **In memory** (managed by OS), NOT in MMU hardware
+- Too big for special on-chip hardware
+- Example: 32-bit address space, 4KB pages
+  - 20-bit VPN (2²⁰ = ~1 million entries)
+  - 4 bytes per PTE
+  - **4MB per page table!**
+  - 100 processes = 400MB just for page tables
+
+**Page-table base register (PTBR)**:
+- Hardware register containing physical address of page table start
+- Used to locate page table for address translation
+
+### Page Table Entry (PTE) Contents
+
+Each PTE contains several bits:
+
+1. **Valid bit**: Is this translation valid?
+   - Invalid pages generate trap to OS (likely terminate process)
+   - Supports sparse address spaces (mark unused pages invalid)
+
+2. **Protection bits**: Read/Write/Execute permissions
+   - Can page be read from? Written to? Executed?
+   - Violation generates trap to OS
+
+3. **Present bit**: Is page in physical memory or swapped to disk?
+   - Used for swapping (covered in later chapters)
+
+4. **Dirty bit**: Has page been modified since loaded into memory?
+   - Used for page replacement decisions
+
+5. **Reference/Accessed bit**: Has page been accessed?
+   - Tracks popular pages for replacement policies
+
+6. **PFN (Physical Frame Number)**: The actual translation
+   - Also called PPN (Physical Page Number)
+
+### Address Translation Process
+
+**Virtual address breakdown**:
 ```
 Virtual Address = [VPN | Offset]
-                   ↓
-              Page Table (indexed by VPN)
-                   ↓
-              [PFN | Offset] = Physical Address
+```
+- VPN bits = log₂(# virtual pages)
+- Offset bits = log₂(page size)
+
+**Translation steps**:
+1. Extract VPN from virtual address: `VPN = (VA & VPN_MASK) >> SHIFT`
+2. Find PTE address: `PTEAddr = PTBR + (VPN × sizeof(PTE))`
+3. Fetch PTE from memory: `PTE = Memory[PTEAddr]`
+4. Check valid bit and protection bits
+5. Extract PFN from PTE
+6. Form physical address: `PA = (PFN << SHIFT) | offset`
+
+**Note**: Offset stays the same (not translated)
+
+### The Two Problems with Paging
+
+1. **Too Slow**:
+   - Every memory access requires **TWO** memory accesses:
+     - One to fetch PTE from page table
+     - One to fetch actual data
+   - Can slow down process by **factor of 2 or more**
+   - Solution: TLB (Chapter 19)
+
+2. **Too Much Memory**:
+   - Page tables consume large amounts of memory
+   - 32-bit address space with 4KB pages = 4MB per process
+   - Wasted on page table instead of useful application data
+   - Solution: Advanced page table structures (Chapter 20)
+
+### Visual: Address Translation Example
+
+**Example from textbook** (64-byte address space, 16-byte pages):
+```
+Virtual address 21 = binary 010101
+
+VPN (top 2 bits)  offset (bottom 4 bits)
+      01      |        0101
+      ↓       |          ↓
+   VPN = 1    |    offset = 5 (5th byte of page)
+
+Page table lookup: VPN 1 → PFN 7 (binary 111)
+
+Physical address:
+      111     |        0101
+   PFN = 7    |    offset = 5
+   = 1110101 binary = 117 decimal
 ```
 
 ### Calculations
@@ -1043,87 +1153,67 @@ Virtual Address = [VPN | Offset]
 - **VPN bits** = log₂(# virtual pages)
 - **PFN bits** = log₂(# physical frames)
 - **Offset bits** = log₂(page size)
-
-### TLB (Translation Lookaside Buffer)
-- **Hardware cache** of recent VPN→PFN translations
-- **TLB Hit**: Translation in TLB (fast, no memory access)
-- **TLB Miss**: Must walk page table in memory (slow)
-- **Hit Rate** = Hits / (Hits + Misses)
-
-### Visual: Paging
-```
-Virtual Address: [VPN=2][Offset=100]
-                     ↓
-Page Table:    [0→5][1→3][2→7][3→2]
-                            ↓
-Physical Address: [PFN=7][Offset=100]
-
-Physical Memory:
-Frame 0: [...]
-Frame 1: [...]
-...
-Frame 7: [page 2's data] ← our access at offset 100
-```
-
-### Hardware vs Software
-- **RISC (Software TLB)**: TLB miss → trap to OS handler (software walks page table)
-- **CISC (Hardware TLB)**: TLB miss → hardware walks page table automatically
+- **Page table size** = # Virtual Pages × sizeof(PTE)
 
 ### Practice Questions with Answers
 
-**Q1: 32-bit virtual address space, 16GB physical memory, 4KB pages. Calculate VPN bits, PFN bits, offset bits.**
+**Q1: What are the two main advantages of paging over segmentation?**
 
 **Answer:**
-- Page size = 4KB = 2^12 → **Offset = 12 bits**
-- Virtual space = 2^32 bytes → # pages = 2^32 / 2^12 = 2^20 → **VPN = 20 bits**
-- Physical = 16GB = 2^34 bytes → # frames = 2^34 / 2^12 = 2^22 → **PFN = 22 bits**
+1. **No external fragmentation**: Fixed-size units (pages/frames) mean any free frame can hold any page. No fragmentation of free space into unusable holes.
+2. **Flexibility**: Supports sparse address spaces easily. No assumptions about how process uses memory (heap/stack growth direction). Mark unused pages as invalid without allocating physical memory.
 
-**Q2: TLB has 100 hits and 20 misses. Calculate hit rate.**
+**Q2: 32-bit virtual address space, 4KB pages. Calculate: (a) how many virtual pages, (b) VPN bits, (c) offset bits, (d) linear page table size.**
 
 **Answer:**
-- Total accesses = 100 + 20 = 120
-- Hit rate = 100/120 = **83.3%**
+- Page size = 4KB = 2¹² bytes
+- (a) # virtual pages = 2³² / 2¹² = **2²⁰ pages** (~1 million)
+- (b) VPN bits = log₂(2²⁰) = **20 bits**
+- (c) Offset bits = log₂(2¹²) = **12 bits**
+- (d) Page table size = 2²⁰ entries × 4 bytes/PTE = **4MB**
 
 **Q3: Page table for process: VPN 0→PFN 4, VPN 1→PFN 7, VPN 2→PFN 1. Page size=1KB. Translate virtual address 1200.**
 
 **Answer:**
-- 1200 bytes = 1KB + 176 bytes
+- Page size = 1KB = 1024 bytes
 - VPN = 1200 / 1024 = **1**, Offset = 1200 % 1024 = **176**
-- Page table: VPN 1 → PFN 7
-- Physical = (7 × 1024) + 176 = 7168 + 176 = **7344**
+- Page table lookup: VPN 1 → PFN 7
+- Physical address = (PFN × page size) + offset = (7 × 1024) + 176 = **7344**
 
-**Q4: Why do we need a TLB? What problem does it solve?**
-
-**Answer:** Without TLB, every memory access requires two memory accesses: one to read the page table entry, one to access actual data. This doubles memory access time. TLB caches recent translations so most accesses only require one memory access (on TLB hit), dramatically improving performance.
-
-**Q5: 64-entry TLB, 4KB pages. Program accesses addresses 0, 4096, 8192, 4096, 0. Assume empty TLB initially. How many hits/misses?**
+**Q4: List and explain three bits found in a typical page table entry (PTE).**
 
 **Answer:**
-```
-Access 0 (VPN=0): Miss → load VPN 0 into TLB
-Access 4096 (VPN=1): Miss → load VPN 1 into TLB
-Access 8192 (VPN=2): Miss → load VPN 2 into TLB
-Access 4096 (VPN=1): Hit (VPN 1 in TLB)
-Access 0 (VPN=0): Hit (VPN 0 in TLB)
-```
-**3 misses, 2 hits**
+1. **Valid bit**: Indicates if translation is valid. If 0, page is not in use → accessing it traps to OS (segmentation fault). Allows sparse address spaces.
+2. **Protection bits (R/W/X)**: Specifies whether page can be read, written, or executed. Prevents code from being written to, data from being executed.
+3. **Dirty bit**: Tracks if page has been modified since loaded. Used for page replacement—clean pages don't need to be written back to disk.
+(Others: Present bit for swapping, Reference/Accessed bit for replacement policies)
 
-**Q6: What's the difference between hardware-managed and software-managed TLBs?**
+**Q5: Why does paging cause the system to run "too slowly"? Explain with a specific example.**
 
 **Answer:**
-- **Hardware-managed (CISC/x86)**: On TLB miss, hardware automatically walks page table in memory, loads PTE into TLB
-- **Software-managed (RISC)**: On TLB miss, hardware raises exception to OS, OS handler walks page table, loads TLB, returns
-- Hardware is faster, software is more flexible
+Every memory access requires **TWO** memory accesses:
+1. Access page table in memory to fetch PTE (get PFN for translation)
+2. Access actual data at translated physical address
 
-**Q7: 16-bit addresses, 256-byte pages. How much memory must be allocated for a linear page table?**
+Example: `mov 0x1000, %eax`
+- Access 1: Fetch PTE for VPN of 0x1000 from page table in memory
+- Access 2: Fetch data at physical address from translated result
+This **doubles** the memory accesses, slowing system by factor of 2 or more. TLB (next chapter) solves this.
+
+**Q6: 64-byte virtual address space, 16-byte pages. Virtual address is 21. Show the translation to physical address if VPN 1 maps to PFN 7.**
 
 **Answer:**
-- Address space = 2^16 = 64KB
-- Page size = 256 bytes = 2^8
-- # pages = 64KB / 256B = 256 pages
-- Each PTE typically ~4 bytes
-- **Page table size = 256 × 4 = 1024 bytes = 1KB**
-(This is the minimum required memory for the page table)
+- 64-byte space / 16-byte pages = 4 pages → VPN = 2 bits
+- Offset within 16-byte page → 4 bits
+- Virtual address 21 = binary 010101
+  - VPN = top 2 bits = **01** (VPN 1)
+  - Offset = bottom 4 bits = **0101** (5 decimal)
+- Page table: VPN 1 → PFN 7 (binary 111)
+- Physical address = 1110101 binary = **117 decimal**
+
+**Q7: Why are page tables stored in memory instead of in special hardware registers in the MMU?**
+
+**Answer:** Page tables are **too large** to fit in hardware. Example: 32-bit address space with 4KB pages requires 2²⁰ entries (~1 million). With 4 bytes per PTE, that's 4MB per process. With 100 processes, that would be 400MB of on-chip storage—completely impractical. Instead, page tables reside in memory, and hardware uses a **page-table base register (PTBR)** to locate them.
 
 ---
 
