@@ -120,76 +120,95 @@
 **Direct Execution**: Run program directly on CPU (fast but problematic)
 **Limited Direct Execution**: OS restricts what programs can do via hardware support
 
+The **two central challenges**: (1) **Performance** - implement virtualization without excessive overhead, and (2) **Control** - run processes efficiently while retaining control over the CPU.
+
 ### Two Main Problems
-1. **Restricted Operations**: How to prevent user programs from doing whatever they want?
-2. **Switching Between Processes**: How does OS regain control of CPU?
+1. **Problem #1: Restricted Operations** - How to prevent user programs from doing whatever they want while still running efficiently?
+2. **Problem #2: Switching Between Processes** - How does OS regain control of CPU?
 
-### User Mode vs Kernel Mode
-- **User Mode**: Restricted; cannot issue I/O requests or privileged instructions
-- **Kernel Mode**: Full privileges; OS runs in this mode
-- **System Call**: User program requests OS to perform privileged operation
-- **Trap**: Enters kernel mode (raises privilege)
-- **Return-from-trap**: Returns to user mode (lowers privilege)
+### User Mode vs Kernel Mode (Protected Control Transfer)
+- **User Mode**: Restricted; cannot issue I/O requests or privileged instructions. Process would raise exception if it tried.
+- **Kernel Mode**: Full privileges; OS runs in this mode. Can issue I/O, execute all restricted instructions.
+- **Trap**: Special instruction that **simultaneously** jumps into kernel **and** raises privilege level to kernel mode
+- **Return-from-trap**: Special instruction that **simultaneously** returns to user program **and** reduces privilege level back to user mode
+- **Hardware saves registers** onto **per-process kernel stack** during trap
 
-### System Call Mechanism
-1. Program issues system call
-2. **Trap** into kernel (save registers, switch to kernel mode)
-3. OS handles request via **trap handler**
-4. OS executes **return-from-trap** (restore registers, switch to user mode)
-5. Program continues
+### Trap Table and System Calls
+- **Trap table** set up by OS **at boot time** (when machine boots in privileged/kernel mode)
+- OS informs hardware where trap handlers are located (syscall handler, timer handler, etc.)
+- Hardware remembers these locations until machine is rebooted
+- User code **cannot specify exact address** to jump to (security risk!)
+- Instead, **system-call number** is placed in register or stack
+- OS examines this number and executes corresponding code
+- This level of indirection provides **protection**
 
-### Timer Interrupt
-- Hardware timer interrupts CPU periodically
-- Gives OS chance to regain control
-- OS can decide to switch to different process (context switch)
+### Two Phases of Limited Direct Execution Protocol
 
-### Context Switch
-- OS saves register state of current process (PCB)
-- OS restores register state of next process (PCB)
-- Switch to new process's kernel stack
-- Return-from-trap returns to new process
+**Phase 1 @ Boot (kernel mode)**:
+- Initialize trap table (tell hardware where syscall handler, timer handler are)
+- Start timer interrupt
+
+**Phase 2 @ Run (kernel mode → user mode → kernel mode)**:
+- OS creates process entry, allocates memory, loads program, sets up user stack with argv
+- OS fills kernel stack with reg/PC
+- OS executes **return-from-trap** to start process in user mode
+- Process runs in user mode
+- Process traps back into OS (via system call or timer interrupt)
+- OS handles trap, then return-from-trap back to process
+
+### Regaining Control: Cooperative vs Non-Cooperative
+
+**Cooperative Approach** (old Mac OS, Xerox Alto):
+- OS **waits** for system calls or illegal operations
+- Process voluntarily gives up CPU via system calls or yield()
+- Problem: Infinite loop → must reboot machine!
+
+**Non-Cooperative Approach** (modern systems):
+- **Timer interrupt** - hardware timer programmed to raise interrupt every X milliseconds
+- When interrupt raised, currently running process is halted
+- Hardware saves registers, OS interrupt handler runs
+- OS regains control and can switch to different process
+- This is a **privileged operation** (starting/stopping timer)
+
+### Context Switch - TWO Types of Register Saves
+
+A context switch involves **two different types** of register saves/restores:
+
+1. **When timer interrupt occurs (hardware-driven)**:
+   - **User registers** of running process are **implicitly saved by hardware**
+   - Saved onto that process's **kernel stack**
+   - Hardware does this automatically
+
+2. **When OS decides to switch from A to B (software-driven)**:
+   - **Kernel registers** are **explicitly saved by software (OS)**
+   - Saved into **process structure** in memory (not stack)
+   - OS saves registers, PC, kernel stack pointer of process A
+   - OS restores registers, PC, kernel stack pointer of process B
+   - **By switching stacks**, kernel enters switch() in context of A, returns in context of B
+   - Return-from-trap then restores B and starts running it
 
 ### Practice Questions
 
-1. What does "Limited Direct Execution" mean?
+1. **What are the two main problems that Limited Direct Execution solves? What is the solution to each?**
+   - **Answer**: (1) Restricted Operations - solved using user mode/kernel mode and trap mechanism. (2) Switching Between Processes - solved using timer interrupt to regain control.
 
-2. Why does direct execution need to be "limited"?
+2. **Explain what happens during a trap instruction. What two things does it do simultaneously?**
+   - **Answer**: Trap simultaneously (1) jumps into the kernel at a pre-specified location in the trap table, and (2) raises the privilege level from user mode to kernel mode. Hardware also saves registers onto the per-process kernel stack.
 
-3. What are the advantages of unlimited direct execution? What are the problems?
+3. **Why can't user code specify an exact address to jump to when making a system call? What mechanism is used instead?**
+   - **Answer**: Allowing exact addresses would let malicious code jump anywhere in kernel (e.g., past permission checks), taking over the machine. Instead, user code places a system-call number in a register, and the OS uses the trap table to find the corresponding handler. This indirection provides protection.
 
-4. What is the difference between user mode and kernel mode?
+4. **Describe the two phases of the Limited Direct Execution protocol (boot time vs run time).**
+   - **Answer**: Boot time (kernel mode): OS initializes trap table, tells hardware where handlers are, starts timer. Run time: OS sets up process and uses return-from-trap to start it in user mode. Process runs, then traps back via syscall or timer interrupt. OS handles it and returns control.
 
-5. How does a user program perform a privileged operation (like reading from disk)?
+5. **What is the difference between cooperative and non-cooperative approaches to regaining CPU control? Why is the non-cooperative approach necessary?**
+   - **Answer**: Cooperative: OS waits for process to make system call or illegal operation. Problem: infinite loop means reboot. Non-cooperative: Timer interrupt forcibly interrupts process every X milliseconds, giving OS control. This prevents rogue processes from taking over the machine.
 
-6. What happens during a trap instruction?
+6. **During a context switch, there are TWO different types of register saves/restores. What are they and who performs each?**
+   - **Answer**: (1) When timer interrupt occurs: hardware implicitly saves user registers of running process onto its kernel stack. (2) When OS switches from process A to B: software (OS) explicitly saves kernel registers into process structure of A, then restores kernel registers from process structure of B.
 
-7. What happens during return-from-trap?
-
-8. How does the OS set up trap handlers? When does this happen?
-
-9. Why is a timer interrupt necessary for the OS?
-
-10. Without a timer interrupt, what could a malicious program do?
-
-11. Describe the complete flow when a program makes a system call to read a file.
-
-12. What is a context switch and when does it occur?
-
-13. What information must be saved during a context switch?
-
-14. How does the OS enforce limited direct execution?
-
-15. What is the trap table and when is it initialized?
-
-16. If a program runs a tight loop with no system calls, how does the OS regain control?
-
-17. What privilege level does user code run at? What about OS code?
-
-18. Why can't user programs directly access hardware?
-
-19. Explain the cooperative vs non-cooperative approach to regaining CPU control.
-
-20. What happens on boot with respect to trap handlers and timer interrupts?
+7. **How does switching kernel stacks enable a context switch? Explain the flow.**
+   - **Answer**: OS calls switch() routine while in context of process A (on A's kernel stack). switch() saves A's registers to A's process structure, restores B's registers from B's process structure, and switches to B's kernel stack. Now executing on B's stack. When switch() returns, it returns in context of B. Return-from-trap then resumes B in user mode.
 
 ---
 
