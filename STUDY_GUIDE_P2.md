@@ -1,31 +1,134 @@
 
 ## Chapters 28/29: Locks
 
+### The Crux: How to Build a Lock
+**Question:** How can we build an efficient lock? Efficient locks provide mutual exclusion at low cost, and also might attain a few other properties. What hardware support is needed? What OS support?
+
 ### Lock Basics
 ```c
-lock_t mutex;
-lock(&mutex);
-// critical section
-unlock(&mutex);
+lock_t mutex; // lock variable (available/free or acquired/held)
+lock(&mutex);  // acquire lock
+// critical section - only one thread here at a time
+unlock(&mutex); // release lock
 ```
 
-### Properties of Locks
-- **Mutual exclusion**: Only one thread in critical section
-- **Fairness**: Each thread eventually gets the lock
-- **Performance**: Low overhead
+A lock is just a **variable** that holds state: **available** (unlocked/free) or **acquired** (locked/held). Exactly one thread holds the lock and is presumably in a critical section.
 
-### Atomic Instructions
-
-**Test-and-Set**: Atomically read old value and set to 1
+**POSIX**: Uses `pthread_mutex_t` (mutex = mutual exclusion)
 ```c
-int TestAndSet(int *ptr) {
-    int old = *ptr;
-    *ptr = 1;
-    return old;  // returns 0 if lock was free
+pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+Pthread_mutex_lock(&lock);
+balance = balance + 1;
+Pthread_mutex_unlock(&lock);
+```
+
+### Lock Evaluation Criteria
+
+**1. Mutual Exclusion**: Does the lock work? Does it prevent multiple threads from entering critical section?
+
+**2. Fairness**: Does each thread contending for the lock get a fair shot at acquiring it once it's free? Or can threads starve, never obtaining the lock?
+
+**3. Performance**: Time overheads added by using the lock
+- **No contention**: Single thread running, grabs and releases lock - overhead?
+- **Single CPU, contention**: Multiple threads contending on single CPU - performance concerns?
+- **Multiple CPUs, contention**: Threads on each CPU contending - how does it scale?
+
+### Early Solutions
+
+**Controlling Interrupts** (doesn't work on multiprocessors!)
+```c
+void lock() { DisableInterrupts(); }
+void unlock() { EnableInterrupts(); }
+```
+- **Positives**: Simple
+- **Negatives**:
+  - Requires privileged operation (trust issues - greedy program could monopolize processor)
+  - Doesn't work on multiprocessors (threads on other CPUs can still enter critical section)
+  - Can lose interrupts (disk I/O completion, etc.)
+- **Use**: OS itself uses interrupt masking for its own data structures (trust is not an issue)
+
+**Failed Attempt: Just Loads/Stores** (Figure 28.1)
+```c
+typedef struct { int flag; } lock_t;
+void lock(lock_t *lock) {
+    while (lock->flag == 1) ; // TEST the flag
+    lock->flag = 1;            // SET it!
+}
+```
+**Problem**: Race condition! Two threads can both see flag==0, both exit while loop, both set flag=1, both enter critical section. **Mutual exclusion violated!**
+
+### Atomic Instructions (Hardware Support)
+
+**Test-and-Set** (a.k.a. atomic exchange) - Burroughs B5000, early 1960's
+```c
+int TestAndSet(int *ptr, int new) {
+    int old = *ptr;  // fetch old value
+    *ptr = new;      // store 'new' into ptr
+    return old;      // return the old value
+}
+```
+- Entire operation is **atomic** (executed as single instruction)
+- On SPARC: `ldstub`, on x86: `xchg`
+- Returns 0 if lock was free (enabling you to acquire it)
+
+**Using Test-and-Set for Spin Lock** (Figure 28.3):
+```c
+void lock(lock_t *lock) {
+    while (TestAndSet(&lock->flag, 1) == 1)
+        ; // spin-wait (do nothing)
+}
+void unlock(lock_t *lock) {
+    lock->flag = 0;
+}
+```
+**Evaluation**: ✓ Correct (mutual exclusion), ✗ No fairness (can spin forever), ✗ Poor performance (single CPU wastes entire time slice spinning)
+
+**Compare-and-Swap** (more powerful than test-and-set)
+```c
+int CompareAndSwap(int *ptr, int expected, int new) {
+    int actual = *ptr;
+    if (actual == expected)
+        *ptr = new;
+    return actual;  // caller knows if it succeeded
+}
+```
+- Tests if value at ptr equals expected; if so, update to new
+- Used similarly to test-and-set for locks:
+```c
+void lock(lock_t *lock) {
+    while (CompareAndSwap(&lock->flag, 0, 1) == 1)
+        ; // spin
 }
 ```
 
-**Fetch-and-Add**: Atomically increment and return old value
+**Load-Linked and Store-Conditional** (MIPS, Alpha, PowerPC, ARM)
+```c
+int LoadLinked(int *ptr) {
+    return *ptr;
+}
+int StoreConditional(int *ptr, int value) {
+    if (no update to *ptr since LL to this addr) {
+        *ptr = value;
+        return 1; // success!
+    } else {
+        return 0; // failed to update
+    }
+}
+```
+**Using LL/SC** (Figure 28.6):
+```c
+void lock(lock_t *lock) {
+    while (1) {
+        while (LoadLinked(&lock->flag) == 1)
+            ; // spin until it's zero
+        if (StoreConditional(&lock->flag, 1) == 1)
+            return; // success: acquired lock
+        // otherwise: try again
+    }
+}
+```
+
+**Fetch-and-Add** (enables ticket locks - Mellor-Crummey & Scott)
 ```c
 int FetchAndAdd(int *ptr) {
     int old = *ptr;
@@ -33,10 +136,275 @@ int FetchAndAdd(int *ptr) {
     return old;
 }
 ```
+**Ticket Lock** (Figure 28.7) - **ensures fairness!**
+```c
+typedef struct { int ticket; int turn; } lock_t;
 
-### Spin Lock vs Sleep Lock
-- **Spin lock**: Waste CPU cycles waiting (busy-waiting)
-- **Sleep lock**: Yield CPU, OS wakes when lock available (efficient)
+void lock(lock_t *lock) {
+    int myturn = FetchAndAdd(&lock->ticket);
+    while (lock->turn != myturn)
+        ; // spin
+}
+void unlock(lock_t *lock) {
+    lock->turn = lock->turn + 1;
+}
+```
+**Key difference**: Ensures progress for all threads (FIFO ordering). Once assigned ticket, you WILL be scheduled eventually. Test-and-set could spin forever.
+
+### Spin Locks: Problem and Solutions
+
+**Problem**: Spinning wastes CPU cycles
+- Single CPU: If lock holder preempted, N-1 other threads spin for entire time slice each. Huge waste!
+- Multiple CPUs: Works reasonably well if #threads ≈ #CPUs and critical sections are short
+
+**Solution 1: Just Yield** (Figure 28.8)
+```c
+void lock(lock_t *lock) {
+    while (TestAndSet(&lock->flag, 1) == 1)
+        yield(); // give up CPU
+}
+```
+- `yield()` moves caller from running→ready, deschedules itself
+- Better than spinning, but with many threads (e.g., 100), all 99 others run-and-yield before lock holder runs again
+- Still doesn't address starvation
+
+**Solution 2: Queues - Sleeping Instead of Spinning** (Figure 28.9)
+Use OS primitives: `park()` (put thread to sleep) and `unpark(threadID)` (wake specific thread)
+
+```c
+typedef struct {
+    int flag;
+    int guard;  // spin lock around flag and queue
+    queue_t *q; // queue of waiting threads
+} lock_t;
+
+void lock(lock_t *m) {
+    while (TestAndSet(&m->guard, 1) == 1)
+        ; // acquire guard lock by spinning
+    if (m->flag == 0) {
+        m->flag = 1; // lock is acquired
+        m->guard = 0;
+    } else {
+        queue_add(m->q, gettid());
+        m->guard = 0;
+        park(); // sleep
+    }
+}
+void unlock(lock_t *m) {
+    while (TestAndSet(&m->guard, 1) == 1)
+        ; // acquire guard lock
+    if (queue_empty(m->q))
+        m->flag = 0; // let go of lock
+    else
+        unpark(queue_remove(m->q)); // wake one thread
+    m->guard = 0;
+}
+```
+**Key idea**: Guard lock protects flag and queue (spins only briefly). When can't get lock, add to queue and sleep. Woken thread gets lock directly (flag not set to 0).
+
+**Wakeup/waiting race**: Solved by `setpark()` - call before releasing guard, so if unpark happens before park, subsequent park returns immediately.
+
+**Linux futex** (fast userspace mutex):
+- Combines ideas above
+- Two calls: `futex_wait(address, expected)` and `futex_wake(address)`
+- Single integer tracks both lock status (high bit) and number of waiters (other bits)
+- Fast path (no contention): just atomic bit test-and-set
+- Slow path: kernel manages wait queue
+
+**Two-Phase Locks**:
+- Phase 1: Spin for a while (hoping lock released soon)
+- Phase 2: If not acquired, sleep until woken
+- Hybrid approach: combines advantages of spinning (low latency if lock released quickly) and sleeping (doesn't waste CPU if lock held longer)
+
+### Priority Inversion Problem
+
+**Problem**: High-priority thread T3 waiting for lock held by low-priority T1. Medium-priority T2 starts and runs, preventing T1 from running. T3 (highest priority!) can't run because waiting for T1.
+
+**Real-world**: Occurred on Mars Pathfinder!
+
+**Solutions**:
+- Avoid spin locks (use sleep locks)
+- **Priority inheritance**: Temporarily boost lower thread's priority when higher-priority thread waits for it
+- Ensure all threads have same priority
+
+---
+
+## Chapter 29: Lock-based Concurrent Data Structures
+
+### The Crux: How to Add Locks to Data Structures
+**Question:** When given a particular data structure, how should we add locks to it, in order to make it work correctly? Further, how do we add locks such that the data structure yields high performance, enabling many threads to access the structure at once, i.e., **concurrently**?
+
+### Design Principles
+
+**1. Start Simple**: Add a single big lock (monitor-like approach)
+- Locks acquired when calling routine, released when returning
+- If it's not too slow, you're done! (Avoid premature optimization - Knuth's Law)
+
+**2. Enable More Concurrency**: Only if performance is a problem
+- Use fine-grained locking strategies
+- Be careful: more concurrency ≠ necessarily faster (overhead matters)
+
+**3. Be Wary of Control Flow and Locks**:
+- Functions that begin by acquiring lock must release before returning
+- Error paths are error-prone (e.g., malloc fails - must unlock before return)
+- Minimize lock/unlock points to reduce bugs
+
+### Concurrent Counters
+
+**Simple Counter** (Figure 29.2) - not scalable:
+```c
+typedef struct { int value; pthread_mutex_t lock; } counter_t;
+
+void increment(counter_t *c) {
+    Pthread_mutex_lock(&c->lock);
+    c->value++;
+    Pthread_mutex_unlock(&c->lock);
+}
+```
+**Problem**: With multiple threads, terrible performance (2 threads: 5+ seconds vs 0.03 for 1 thread, for 1M increments each)
+
+**Approximate Counter** (Figure 29.4) - **scalable!**
+- Uses **local counters** (one per CPU) and one **global counter**
+- Each has own lock
+- Thread updates local counter (no contention across CPUs)
+- Periodically transfer local→global when local reaches threshold S
+```c
+typedef struct {
+    int global;                  // global count
+    pthread_mutex_t glock;       // global lock
+    int local[NUMCPUS];         // per-CPU count
+    pthread_mutex_t llock[NUMCPUS]; // per-CPU locks
+    int threshold;               // update frequency
+} counter_t;
+
+void update(counter_t *c, int threadID, int amt) {
+    int cpu = threadID % NUMCPUS;
+    pthread_mutex_lock(&c->llock[cpu]);
+    c->local[cpu] += amt;
+    if (c->local[cpu] >= c->threshold) {
+        pthread_mutex_lock(&c->glock);
+        c->global += c->local[cpu];
+        pthread_mutex_unlock(&c->glock);
+        c->local[cpu] = 0;
+    }
+    pthread_mutex_unlock(&c->llock[cpu]);
+}
+```
+**Tradeoff**: Threshold S controls accuracy vs performance
+- Small S: more accurate, less scalable (behaves like simple counter)
+- Large S: less accurate (global can lag by #CPUs × S), highly scalable
+- Example: S=1024 gives excellent performance (4 threads almost as fast as 1 thread)
+
+### Concurrent Linked Lists
+
+**Basic Approach** (Figure 29.7): Single lock for entire list
+```c
+typedef struct {
+    node_t *head;
+    pthread_mutex_t lock;
+} list_t;
+
+int List_Insert(list_t *L, int key) {
+    pthread_mutex_lock(&L->lock);
+    node_t *new = malloc(sizeof(node_t));
+    if (new == NULL) {
+        perror("malloc");
+        pthread_mutex_unlock(&L->lock); // Must unlock on error path!
+        return -1;
+    }
+    new->key = key;
+    new->next = L->head;
+    L->head = new;
+    pthread_mutex_unlock(&L->lock);
+    return 0;
+}
+```
+
+**Improved Version** (Figure 29.8): Lock only critical section
+```c
+int List_Insert(list_t *L, int key) {
+    node_t *new = malloc(sizeof(node_t)); // OUTSIDE lock
+    if (new == NULL) {
+        perror("malloc");
+        return -1; // No unlock needed!
+    }
+    new->key = key;
+    pthread_mutex_lock(&L->lock);  // Lock only critical section
+    new->next = L->head;
+    L->head = new;
+    pthread_mutex_unlock(&L->lock);
+    return 0;
+}
+```
+**Benefit**: Reduces lock/unlock points, malloc doesn't need lock (thread-safe)
+
+**Hand-over-hand Locking** (a.k.a. lock coupling):
+- Instead of one lock for entire list, lock per node
+- When traversing: grab next node's lock, then release current node's lock
+- Enables high concurrency in list operations
+- **Problem**: Hard to make faster than simple single lock (overhead of acquiring/releasing many locks)
+
+### Concurrent Queues
+
+**Michael and Scott Queue** (Figure 29.9): Two locks for better concurrency
+```c
+typedef struct {
+    node_t *head;
+    node_t *tail;
+    pthread_mutex_t head_lock, tail_lock;
+} queue_t;
+
+void Queue_Enqueue(queue_t *q, int value) {
+    node_t *tmp = malloc(sizeof(node_t));
+    tmp->value = value;
+    tmp->next = NULL;
+    pthread_mutex_lock(&q->tail_lock);  // Only tail lock
+    q->tail->next = tmp;
+    q->tail = tmp;
+    pthread_mutex_unlock(&q->tail_lock);
+}
+
+int Queue_Dequeue(queue_t *q, int *value) {
+    pthread_mutex_lock(&q->head_lock);  // Only head lock
+    node_t *tmp = q->head;
+    node_t *new_head = tmp->next;
+    if (new_head == NULL) {
+        pthread_mutex_unlock(&q->head_lock);
+        return -1; // queue empty
+    }
+    *value = new_head->value;
+    q->head = new_head;
+    pthread_mutex_unlock(&q->head_lock);
+    free(tmp);
+    return 0;
+}
+```
+**Key ideas**:
+- Separate locks enable concurrency of enqueue and dequeue
+- Dummy node enables separation of head/tail operations
+- Common case: enqueue only uses tail_lock, dequeue only uses head_lock
+
+### Concurrent Hash Tables
+
+**Simple and Effective** (Figure 29.10):
+```c
+#define BUCKETS (101)
+typedef struct {
+    list_t lists[BUCKETS];
+} hash_t;
+
+int Hash_Insert(hash_t *H, int key) {
+    return List_Insert(&H->lists[key % BUCKETS], key);
+}
+```
+**Why it scales magnificently**:
+- **Lock per hash bucket** instead of single lock for entire structure
+- Many concurrent operations can proceed (different buckets accessed concurrently)
+- Simple concurrent list used for each bucket
+
+**Performance**: Concurrent hash table with 4 threads scales almost perfectly. Simple linked list with single lock does not scale at all.
+
+**Key Lesson**: Instead of single lock (coarse-grained), use multiple locks for different parts of structure (fine-grained) to enable more concurrency.
 
 ### Practice Questions with Answers
 
