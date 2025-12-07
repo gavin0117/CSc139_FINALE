@@ -669,13 +669,24 @@ These contain virtual addresses that get translated by the MMU.
 
 ## Chapter 16: Segmentation
 
-### Problem with Base & Bounds
+### The Crux: How to Support a Large Address Space
+
+**How do we support a large address space with (potentially) a lot of free space between the stack and the heap?** A 32-bit address space is 4GB, but a typical program only uses megabytes. Base and bounds would waste physical memory on the unused gap.
+
+### Problem with Base & Bounds: Internal Fragmentation
 - Wastes memory (internal fragmentation)
 - If heap and stack are small, large gap between them is unused but still allocated
+- Entire address space must be contiguous in physical memory
+- Not flexible enough for **sparse address spaces**
 
 ### Segmentation = Generalized Base & Bounds
-- Separate base & bounds for each **segment** (code, heap, stack)
-- Each segment can be placed independently in physical memory
+
+**Old idea from early 1960s**: Instead of one base/bounds pair for entire address space, have base/bounds pair **per logical segment**.
+
+- **Segment**: Contiguous portion of address space of particular length
+- Typical segments: **code, heap, stack**
+- Each segment can be placed **independently** in physical memory
+- Only **used** memory is allocated → avoids internal fragmentation between heap and stack
 
 ### Segment Registers (per-process)
 ```
@@ -708,6 +719,60 @@ Virtual Address Space:          Physical Memory:
                       └──────→│ Stack (2KB) │ 28KB
                               └─────────────┘
 ```
+
+### Which Segment? Two Approaches
+
+**Explicit Approach** (VAX/VMS):
+- Use **top bits** of virtual address to select segment
+- Example: 14-bit address → top 2 bits select segment (00=code, 01=heap, 11=stack), bottom 12 bits = offset
+- Hardware: `Segment = (VirtualAddress & SEG_MASK) >> SEG_SHIFT`
+- Limitation: Each segment limited to maximum size (e.g., 4KB with 2-bit selector in 16KB space)
+
+**Implicit Approach**:
+- Hardware determines segment by **how address was formed**
+- From PC (instruction fetch) → code segment
+- From stack/base pointer → stack segment
+- Other → heap segment
+
+### Code Sharing and Protection Bits
+
+**Protection bits** per segment:
+- **Read**, **Write**, **Execute** permissions
+- Code segment: **Read-Execute** (not writable)
+- Heap/Stack: **Read-Write** (not executable)
+
+**Code sharing**:
+- Set code segment to read-only
+- Same physical code segment can be **shared across multiple processes**
+- Each process thinks it has private memory, OS secretly shares read-only code
+- Saves memory while preserving isolation
+
+### External Fragmentation: The KEY Problem
+
+**External fragmentation**: Physical memory becomes full of little holes of free space, making it difficult to allocate new segments or grow existing ones.
+
+Example:
+- Physical memory has 24KB free in three non-contiguous chunks (8KB, 8KB, 8KB)
+- Process requests 20KB segment
+- **Cannot satisfy** request even though total free space (24KB) > request (20KB)
+- Free space is **fragmented** into pieces too small
+
+**Solutions** (none perfect - "if 1000 solutions exist, no great one does"):
+1. **Compaction**: Rearrange segments to create contiguous free space
+   - Stop processes, copy data, update segment registers
+   - **Expensive**: memory-intensive, uses CPU time
+2. **Free-list algorithms**: Best-fit, worst-fit, first-fit, buddy algorithm
+   - Try to minimize fragmentation
+   - External fragmentation still exists
+
+### OS Responsibilities with Segmentation
+
+1. **Context switch**: Save/restore all segment registers (base + bounds for each segment) to/from PCB
+2. **Segment growth**: Handle `malloc()`/`sbrk()` system calls to grow heap
+   - Update segment size register if space available
+   - May reject if no physical memory available
+3. **Managing free space**: Find physical memory for segments using free list
+4. **Exception handling**: Handle segmentation faults (out-of-bounds access)
 
 ### Per-Process vs Common to All
 - **Per-process**: Segment registers (base/bounds), page tables
@@ -754,6 +819,18 @@ Virtual Address Space:          Physical Memory:
 **Answer:**
 - **Per-process**: Segment registers, page tables, PCB, register state, address space
 - **Shared/Global**: OS code, physical memory allocator, device drivers, CPU hardware, trap table
+
+**Q7: Explain external fragmentation in segmentation. Why is it a problem and what are potential solutions?**
+
+**Answer:**
+- **External fragmentation**: Physical memory gets full of small holes of free space between segments
+- **Problem**: May have enough total free space (e.g., 24KB) but not contiguous
+  - Cannot satisfy allocation request (e.g., 20KB) even though total free > requested
+  - Free space is in non-contiguous pieces (e.g., three 8KB chunks)
+- **Solutions**:
+  1. **Compaction**: Rearrange segments to create large contiguous free region (expensive - requires copying, updating registers)
+  2. **Better allocation algorithms**: Best-fit, worst-fit, first-fit (minimize but don't eliminate fragmentation)
+  3. **Ultimate solution** (next chapters): Avoid variable-sized allocations entirely → use **paging**
 
 ---
 
