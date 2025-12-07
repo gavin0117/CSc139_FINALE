@@ -403,15 +403,35 @@ Result: A runs 3 times, B runs 2 times (A has 2× tickets, runs ~2× more)
 
 ### Evolution of Memory Models
 
-1. **No Abstraction**: One program directly uses physical memory
-2. **Time Sharing**: OS switches processes in/out of memory (slow)
-3. **Address Space**: Each process has its own virtual memory view
+1. **Early Systems (No Abstraction)**:
+   - OS at physical address 0 (just a library)
+   - One program at physical address 64KB, uses rest of memory
+   - No protection, direct physical memory access
+
+2. **Multiprogramming**:
+   - Multiple processes **ready to run** at a given time
+   - OS switches between them (e.g., when one does I/O)
+   - **Goal**: Increase CPU utilization/efficiency
+
+3. **Time Sharing**:
+   - Multiple users wanting **interactivity** and timely response
+   - Processes **stay in memory** (not swapped to disk each switch)
+   - **Problem**: Protection becomes critical - need to prevent processes from accessing each other's memory
+
+4. **Address Space Abstraction**:
+   - Each process has its own **virtual memory view**
+   - Program thinks it starts at address 0 and has large address space
+   - Reality: loaded at arbitrary physical address(es)
+
+### The Crux of Memory Virtualization
+
+**How can the OS build this abstraction of a private, potentially large address space for multiple running processes (all sharing memory) on top of a single, physical memory?**
 
 ### Address Space Structure
 ```
 Virtual Memory Layout:
 0KB   ┌──────────────┐
-      │   Code       │  (Program instructions)
+      │   Code       │  (Program instructions - static)
       ├──────────────┤
       │   Heap       │  (malloc data, grows DOWN→)
       │      ↓       │
@@ -421,21 +441,40 @@ Virtual Memory Layout:
 16KB  └──────────────┘
 ```
 
+### Three Goals of Virtual Memory
+
+1. **Transparency**:
+   - VM should be **invisible** to the running program
+   - Program behaves as if it has its own private physical memory
+   - OS and hardware do all the work behind the scenes
+
+2. **Efficiency**:
+   - Make virtualization efficient in **time** (not making programs run much slower)
+   - Make virtualization efficient in **space** (not using too much memory for structures)
+   - Requires hardware support (e.g., TLBs for fast translation)
+
+3. **Protection/Isolation**:
+   - Protect processes from one another
+   - Protect OS from processes
+   - Process cannot access or affect memory outside its address space
+   - Each process runs in its own isolated cocoon
+
 ### Key Concepts
-- **Virtual Address**: What program sees (0KB to 16KB)
-- **Physical Address**: Actual location in RAM
+- **Virtual Address**: What program sees (0KB to 16KB) - **every address you see as a programmer is virtual**
+- **Physical Address**: Actual location in RAM where data really lives
 - **Address Translation**: Hardware+OS maps virtual → physical
 - **Isolation**: Each process thinks it owns all memory (0 to max)
 
 ### Practice Questions with Answers
 
-**Q1: Why do we need address spaces instead of letting programs use physical memory directly?**
+**Q1: What are the three goals of a virtual memory system and why is each important?**
 
 **Answer:**
-- **Isolation**: Prevents processes from accessing each other's memory (security/stability)
-- **Ease of use**: Program doesn't need to know where in physical RAM it will run
-- **Flexibility**: OS can move process in memory, swap to disk, without program knowing
-- **Protection**: OS can enforce read-only code sections, prevent stack overflows into heap
+1. **Transparency**: The OS should implement VM in a way that is **invisible** to the running program. The program shouldn't be aware that memory is virtualized; it behaves as if it has its own private physical memory.
+
+2. **Efficiency**: The OS should make virtualization efficient in both **time** (not making programs run much more slowly) and **space** (not using too much memory for VM structures). Time-efficient virtualization requires hardware support like TLBs.
+
+3. **Protection**: The OS must protect processes from one another and protect itself from processes. When a process performs a load, store, or instruction fetch, it should not be able to access memory outside its address space. This enables **isolation** - each process runs safely, isolated from other faulty or malicious processes.
 
 **Q2: A process has virtual addresses 0-16KB. Its code is at physical address 32KB. What physical address corresponds to virtual address 4KB?**
 
@@ -453,9 +492,14 @@ Virtual Memory Layout:
 - **Stack**: Function calls, local variables, grows upward
 - They're at opposite ends so both can grow without immediately colliding. This maximizes usable space before needing more memory.
 
-**Q4: In early time-sharing systems without address spaces, how did the OS switch between processes?**
+**Q4: Explain the difference between multiprogramming and time sharing. Why did time sharing make protection critical?**
 
-**Answer:** The OS would save the entire process memory to disk, load the next process's memory from disk into RAM, then run it. This was extremely slow due to I/O overhead, making multiprogramming inefficient.
+**Answer:**
+- **Multiprogramming**: Multiple processes are **ready to run** at a given time. The OS switches between them (e.g., when one performs I/O) to increase **CPU utilization**. This was about efficiency.
+
+- **Time Sharing**: Multiple users **concurrently** using a machine, each expecting **timely, interactive** response. Processes **stay in memory** while switching (not swapped to disk each time), making switching fast.
+
+- **Why protection became critical**: With time sharing, multiple programs **reside concurrently in memory**. Without protection, one process could read or write another process's memory, causing security/stability issues. This necessitated memory isolation via address spaces.
 
 **Q5: What does the OS need to set up when creating a process's address space?**
 
@@ -482,6 +526,14 @@ Virtual Memory Layout:
       │  Stack (2KB) │
 16KB  └──────────────┘
 ```
+
+**Q7: You write a C program that prints a pointer to a heap-allocated variable and prints the address of main(). Are these virtual or physical addresses? Where do the values actually live in physical memory?**
+
+**Answer:**
+- **Every address you see as a programmer is virtual**. When you print a pointer in a C program, you're printing a virtual address.
+- The addresses printed (e.g., 0x1095afe50 for code, 0x1096008c0 for heap) are virtual addresses that give the illusion of where things are laid out.
+- **Only the OS and hardware know the real physical addresses**. The program might think it starts at virtual address 0, but it's actually loaded at some arbitrary physical address like 320KB.
+- The OS, with hardware support, translates every virtual address the program uses into the corresponding physical address to fetch/store the actual data.
 
 ---
 
