@@ -539,11 +539,30 @@ Virtual Memory Layout:
 
 ## Chapter 15: Address Translation
 
+### The Crux: How to Efficiently and Flexibly Virtualize Memory
+
+**How can we build an efficient virtualization of memory? How do we provide the flexibility needed by applications? How do we maintain control over which memory locations an application can access? How do we do all of this efficiently?**
+
+### Hardware-Based Address Translation
+
+- **Address translation**: Hardware transforms each memory access (instruction fetch, load, store)
+- Changes **virtual address** (from program) → **physical address** (where data actually is)
+- Happens on **every memory reference** performed by hardware
+- OS sets up hardware correctly, then hardware does translation with no OS intervention
+- **Interposition**: Hardware interposes on each memory access to translate addresses transparently
+
 ### Base and Bounds (Dynamic Relocation)
 
-**Hardware Registers (per-CPU):**
+**Introduced in late 1950s time-sharing machines**
+
+**Assumptions** (simplified):
+1. Address space placed **contiguously** in physical memory
+2. Address space size **< physical memory** size
+3. All address spaces are **exactly the same size**
+
+**Hardware Registers (per-CPU, part of MMU):**
 - **Base register**: Start of physical memory for process
-- **Bounds register**: Size of address space
+- **Bounds register** (also called limit): Size of address space
 
 **Translation Formula:**
 ```
@@ -581,9 +600,19 @@ Physical Memory (actual RAM):
 - Raises exception if out of bounds
 
 **OS:**
-- Sets base/bounds registers during context switch
-- Handles exceptions (e.g., kills process on seg fault)
-- Manages free memory (which physical regions are free)
+- **On process creation**: Find space for address space using **free list** (data structure tracking free physical memory ranges)
+- **On process termination**: Reclaim memory, add back to free list
+- **On context switch**: Save/restore base and bounds registers to/from PCB (Process Control Block)
+- **Exception handling**: Terminate processes that access out-of-bounds memory
+
+### Key Problem: Internal Fragmentation
+
+**Base and bounds wastes memory** due to **internal fragmentation**:
+- Process allocated from base to base+bounds (e.g., 32KB to 48KB = 16KB)
+- But only **code, heap, stack** are actually used
+- **Large gap between heap and stack** is wasted but still allocated
+- This unused space **inside** the allocated unit is "fragmented" → internal fragmentation
+- Solution: **Segmentation** (next chapter) - separate base/bounds for each segment
 
 ### Practice Questions with Answers
 
