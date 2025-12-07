@@ -537,6 +537,322 @@ Virtual Memory Layout:
 
 ---
 
+## Chapter 14: Memory API
+
+### The Crux: How To Allocate And Manage Memory
+
+**In UNIX/C programs, understanding how to allocate and manage memory is critical in building robust and reliable software. What interfaces are commonly used? What mistakes should be avoided?**
+
+### Two Types of Memory
+
+**1. Stack Memory (Automatic Memory)**:
+- Allocations and deallocations managed **implicitly** by the compiler
+- Declaration: `int x;` inside a function
+- **Compiler handles everything**: Makes space on call, frees on return
+- **Limitation**: Data disappears when function returns
+- **Use**: Local variables, function parameters
+
+**2. Heap Memory**:
+- Allocations and deallocations **explicitly** handled by programmer
+- Uses `malloc()` to allocate, `free()` to deallocate
+- **Heavy responsibility**, cause of many bugs
+- **Advantage**: Long-lived memory that persists beyond function call
+- **Use**: Dynamic data structures, memory needed across function calls
+
+### The malloc() Call
+
+**Signature**: `void *malloc(size_t size);`
+
+**Usage**:
+```c
+#include <stdlib.h>
+
+int *x = (int *) malloc(sizeof(int));  // Allocate integer on heap
+```
+
+**Key points**:
+- Pass size in bytes using `sizeof()` operator
+- Returns pointer to allocated memory (or NULL on failure)
+- Returns `void *` (generic pointer), typically cast to appropriate type
+- **Library call**, not system call (built on top of brk/sbrk/mmap)
+- **Always check for NULL** to handle allocation failures
+
+**Important idioms**:
+- Integers: `int *x = malloc(sizeof(int));`
+- Arrays: `int *arr = malloc(10 * sizeof(int));`
+- Strings: `char *s = malloc(strlen(src) + 1);` (the +1 is for null terminator!)
+- Structs: `struct node *n = malloc(sizeof(struct node));`
+
+**Common mistake with sizeof()**:
+```c
+int *x = malloc(10 * sizeof(int));  // Array of 10 integers
+printf("%zu\n", sizeof(x));  // Prints 4 or 8 (size of pointer!)
+                             // NOT 40 (size of allocated memory)
+```
+
+### The free() Call
+
+**Signature**: `void free(void *ptr);`
+
+**Usage**:
+```c
+int *x = malloc(10 * sizeof(int));
+// ... use x ...
+free(x);  // Free the memory
+```
+
+**Key points**:
+- Takes **only** the pointer returned by malloc() (no size argument)
+- Size tracked internally by memory allocation library
+- **Must** free memory when done (or memory leak occurs)
+- Knowing **when**, **how**, and **if** to free is the hard part
+
+### Common Errors (The Deadly Seven)
+
+**1. Forgetting to Allocate Memory**
+```c
+char *src = "hello";
+char *dst;  // OOPS! Not allocated
+strcpy(dst, src);  // Segmentation fault!
+```
+**Fix**: `char *dst = malloc(strlen(src) + 1);`
+
+**2. Not Allocating Enough Memory (Buffer Overflow)**
+```c
+char *src = "hello";
+char *dst = malloc(strlen(src));  // TOO SMALL! (missing +1)
+strcpy(dst, src);  // Writes past allocated space
+```
+- Can cause security vulnerabilities
+- May appear to work but is incorrect
+- **Always allocate enough**: `malloc(strlen(src) + 1)` for strings
+
+**3. Forgetting to Initialize Allocated Memory**
+```c
+int *arr = malloc(10 * sizeof(int));
+// Forgot to initialize!
+printf("%d\n", arr[0]);  // Uninitialized read - unknown value
+```
+- Results in **uninitialized reads**
+- **Fix**: Initialize after allocating, or use `calloc()` which zeros memory
+
+**4. Forgetting to Free Memory (Memory Leak)**
+```c
+void func() {
+    int *x = malloc(sizeof(int));
+    // ... use x ...
+    // OOPS! Forgot to call free(x)
+}  // Memory leaked when function returns
+```
+- In **long-running programs** (servers, OS): eventually runs out of memory
+- In **short programs**: OS reclaims all memory when process exits
+- **Best practice**: Always free what you allocate (develop good habits!)
+
+**5. Freeing Memory Before Done (Dangling Pointer)**
+```c
+int *x = malloc(sizeof(int));
+free(x);
+*x = 10;  // OOPS! Using freed memory (dangling pointer)
+```
+- Can crash or corrupt memory
+- Free might let malloc() reuse that memory for something else
+
+**6. Freeing Memory Repeatedly (Double Free)**
+```c
+int *x = malloc(sizeof(int));
+free(x);
+free(x);  // OOPS! Double free
+```
+- Result is **undefined** (crashes common)
+- Memory allocation library gets confused
+
+**7. Calling free() Incorrectly (Invalid Free)**
+```c
+int *x = malloc(10 * sizeof(int));
+free(x + 5);  // OOPS! Not the pointer malloc returned!
+```
+- **Must** pass exact pointer returned by malloc()
+- Passing any other value → undefined behavior
+
+### Underlying OS Support
+
+**malloc() and free() are library calls**, not system calls. The memory allocation library manages space within your virtual address space, built on top of system calls:
+
+**brk / sbrk**:
+- Change location of program's **break** (end of heap)
+- `brk(addr)`: Set break to new address
+- `sbrk(increment)`: Increment break by given amount
+- **Never call directly** - used internally by malloc library
+
+**mmap()**:
+- Create **anonymous memory region** (not associated with file)
+- Can be treated like heap and managed
+- Provides alternative to brk/sbrk for memory allocation
+- Understanding basic role sufficient (not detailed parameters)
+
+**Two levels of memory management**:
+1. **OS level**: Gives memory to processes, reclaims when process exits
+2. **Library level**: malloc/free manage heap within process
+
+### Other Useful Calls
+
+**calloc()**:
+- Allocates memory **and zeroes it** before returning
+- Prevents uninitialized read errors
+- `int *arr = calloc(10, sizeof(int));` // 10 integers, all set to 0
+
+**realloc()**:
+- Resize previously allocated memory
+- Makes new larger region, copies old data, returns new pointer
+- `arr = realloc(arr, 20 * sizeof(int));` // Grow from 10 to 20 elements
+
+### Practice Questions with Answers
+
+**Q1: What is the difference between stack memory and heap memory? Give an example of when you would use each.**
+
+**Answer:**
+**Stack memory (automatic)**:
+- Managed **implicitly** by compiler
+- Allocated on function call, freed on return
+- Example: `int x;` inside function
+- **Use when**: Local variables, temporary data that doesn't need to persist beyond function
+
+**Heap memory**:
+- Managed **explicitly** by programmer with malloc()/free()
+- Persists until explicitly freed
+- Example: `int *x = malloc(sizeof(int));`
+- **Use when**: Data must persist beyond function call, size unknown at compile time, large data structures
+
+**Key difference**: Stack data **disappears** when function returns; heap data **persists** until freed.
+
+**Q2: What is wrong with this code? How would you fix it?**
+```c
+char *src = "hello";
+char *dst = malloc(strlen(src));
+strcpy(dst, src);
+```
+
+**Answer:**
+**Problem**: **Buffer overflow** - allocated only 5 bytes but "hello" needs 6 bytes (5 characters + 1 null terminator).
+
+**Fix**:
+```c
+char *dst = malloc(strlen(src) + 1);  // +1 for null terminator!
+strcpy(dst, src);
+```
+
+The `+1` is critical for the null terminator `'\0'` that marks the end of C strings. Without it, strcpy writes one byte past the allocated space.
+
+**Q3: Explain the memory leak in this code. Is it a problem if the program runs for 1 second? What if it runs for 1 year?**
+```c
+void process_data() {
+    int *data = malloc(1000 * sizeof(int));
+    // ... process data ...
+    // Forgot to call free(data)
+}
+
+int main() {
+    while (1) {
+        process_data();  // Called repeatedly
+    }
+}
+```
+
+**Answer:**
+**Memory leak**: Each call to `process_data()` allocates 4KB (1000 × 4 bytes) but never frees it. The allocated memory is lost when the function returns.
+
+**Short program (1 second)**: Not a major problem. When the process exits, the **OS reclaims all memory** (both leaked and properly managed). No memory is truly "lost" to the system.
+
+**Long-running program (1 year)**: **Huge problem!** This server/daemon will continuously leak 4KB per call. Eventually runs out of memory and crashes. This is why **long-running programs** (web servers, databases, operating systems) must be extremely careful about memory leaks.
+
+**Fix**: Add `free(data);` before returning from `process_data()`.
+
+**Q4: What happens when you call free() on a pointer that was not returned by malloc()? What about calling free() twice on the same pointer?**
+
+**Answer:**
+**Invalid free** (pointer not from malloc):
+```c
+int x = 5;
+free(&x);  // WRONG! x is on stack, not heap
+```
+- **Undefined behavior** - can crash, corrupt memory allocator state
+- Must **only** pass pointers returned by malloc() to free()
+
+**Double free**:
+```c
+int *x = malloc(sizeof(int));
+free(x);
+free(x);  // WRONG! Already freed
+```
+- **Undefined behavior** - memory allocator gets confused
+- Common outcome: **crash**
+- Allocator might try to add same memory to free list twice
+
+**Q5: Why do we use sizeof(type) instead of hardcoding sizes like 4 or 8 when calling malloc()?**
+
+**Answer:**
+**Portability**: Type sizes vary across architectures
+- 32-bit system: `sizeof(int)` = 4, `sizeof(int *)` = 4
+- 64-bit system: `sizeof(int)` = 4, `sizeof(int *)` = 8
+
+**Example problem**:
+```c
+int *x = malloc(4);  // BAD! Hardcoded size
+```
+- Works on 32-bit, but pointer is 8 bytes on 64-bit → too small!
+
+**Correct approach**:
+```c
+int *x = malloc(sizeof(int));  // GOOD! Always correct size
+```
+
+Using `sizeof()` makes code **portable** across different architectures and resilient to type changes.
+
+**Q6: What is a dangling pointer and how can it cause problems?**
+
+**Answer:**
+**Dangling pointer**: A pointer to memory that has been freed
+
+**Example**:
+```c
+int *x = malloc(sizeof(int));
+*x = 42;
+free(x);  // Memory freed
+printf("%d\n", *x);  // Dangling pointer dereference!
+```
+
+**Problems**:
+1. **Undefined behavior** - might print 42, might print garbage, might crash
+2. **Use-after-free**: If malloc() reuses that memory for something else, you're now reading/writing someone else's data
+3. **Security vulnerabilities**: Attackers can exploit use-after-free bugs
+
+**Prevention**:
+- Set pointer to NULL after freeing: `free(x); x = NULL;`
+- Don't use pointers after freeing the memory they point to
+
+**Q7: Explain the relationship between malloc()/free() and the OS. Are they system calls?**
+
+**Answer:**
+**malloc()/free() are NOT system calls** - they are **library calls** (part of C standard library).
+
+**How it works**:
+1. **Library level**: malloc()/free() manage the **heap** within your process's virtual address space
+   - Track which regions are allocated/free
+   - Satisfy allocation requests from existing heap space when possible
+
+2. **OS level**: When library needs more memory, it calls OS system calls:
+   - **brk/sbrk**: Grow the heap by moving the program break
+   - **mmap()**: Create new memory regions
+
+3. **When process exits**: OS reclaims **all** process memory (code, stack, heap) regardless of whether you called free()
+
+**Why this matters**:
+- malloc/free are **fast** (no system call overhead most of the time)
+- OS system calls only needed occasionally when heap grows
+- Two-level management: library handles small allocations efficiently, OS handles process-level memory
+
+---
+
 ## Chapter 15: Address Translation
 
 ### The Crux: How to Efficiently and Flexibly Virtualize Memory
