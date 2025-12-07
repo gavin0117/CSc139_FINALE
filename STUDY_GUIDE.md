@@ -1217,6 +1217,248 @@ This **doubles** the memory accesses, slowing system by factor of 2 or more. TLB
 
 ---
 
+## Chapter 19: Paging - Faster Translations (TLBs)
+
+### The Crux: How to Speed Up Address Translation
+
+**How can we speed up address translation, and generally avoid the extra memory reference that paging seems to require? What hardware support is required? What OS involvement is needed?**
+
+### What is a TLB?
+
+**TLB** = **Translation-Lookaside Buffer** (historical name from 1964, John Couleur)
+- Better name: **Address-translation cache**
+- **Hardware cache** of popular virtual-to-physical address translations
+- Part of chip's **Memory Management Unit (MMU)**
+- Small, fast, on-chip memory
+- **Makes virtual memory possible** - without TLB, paging would be too slow
+
+### TLB Basic Operation
+
+**On each virtual memory reference**:
+1. Hardware checks TLB for translation
+2. **TLB Hit**: Translation found → use it (fast, no memory access needed)
+3. **TLB Miss**: Translation not found → access page table in memory, update TLB, retry instruction
+
+**Control flow**:
+```
+VPN = extract from virtual address
+if (VPN in TLB):  // TLB Hit
+    PFN = TLB[VPN].PFN
+    check protection bits
+    PhysAddr = (PFN << SHIFT) | offset
+    access memory
+else:  // TLB Miss
+    PTE = PageTable[VPN]  // Extra memory access!
+    check valid bit, protection bits
+    TLB_Insert(VPN, PTE.PFN, PTE.ProtectBits)
+    retry instruction  // Now will be TLB hit
+```
+
+### Spatial and Temporal Locality
+
+**Spatial locality**: Elements close in space accessed together
+- Array access: `a[0]`, `a[1]`, `a[2]` all on same page
+- First access to page = TLB miss, subsequent accesses = TLB hit
+- Example: 10-element array spread across 3 pages
+  - Access pattern: **miss, hit, hit, miss, hit, hit, hit, miss, hit, hit**
+  - Hit rate: **70%** even on first pass!
+
+**Temporal locality**: Recently accessed items accessed again soon
+- Second pass through same array: **all hits** (if TLB large enough)
+- Loop variables, repeatedly executed code
+
+### Who Handles TLB Miss?
+
+**Hardware-managed TLB** (CISC, Intel x86):
+- Hardware knows page table location (CR3 register)
+- Hardware knows page table format (multi-level)
+- On miss: Hardware automatically walks page table, updates TLB
+- **Advantage**: Fast
+- **Disadvantage**: Inflexible (page table format fixed by hardware)
+
+**Software-managed TLB** (RISC, MIPS, SPARC):
+- On miss: Hardware raises **TLB_MISS exception**
+- Traps to OS handler in kernel mode
+- OS walks page table (any format OS wants!)
+- OS uses **privileged instructions** to update TLB
+- Return-from-trap **retries** instruction → TLB hit
+- **Advantage**: Flexibility (OS can use any page table structure)
+- **Disadvantage**: Trap overhead
+
+**Important details**:
+1. **Return-from-trap must retry** the instruction that caused the trap (not next instruction)
+2. **Avoid infinite TLB miss loops**:
+   - Keep TLB miss handler in **physical memory** (unmapped)
+   - Use **wired translations** (permanently in TLB for handler code)
+
+### TLB Contents
+
+**Typical TLB**: 32, 64, or 128 entries
+
+**Each entry**:
+```
+| VPN | PFN | Valid | Protection | Dirty | ASID | G | other |
+```
+
+- **VPN**: Virtual Page Number (tag for lookup)
+- **PFN**: Physical Frame Number (translation)
+- **Valid bit**: Is this entry valid?
+- **Protection bits**: Read/Write/Execute permissions
+- **Dirty bit**: Has page been modified?
+- **ASID**: Address Space Identifier (process ID, ~8 bits)
+- **G (Global)**: Globally shared across processes
+
+**Fully associative**:
+- Translation can be in **any TLB entry**
+- Hardware searches **all entries in parallel**
+- Expensive but necessary for small TLBs
+
+### Context Switch Problem
+
+**Problem**: TLB contains translations only valid for current process
+- Process P1: VPN 10 → PFN 100
+- Process P2: VPN 10 → PFN 170
+- If both in TLB, which is which?
+
+**Solution 1: Flush TLB on context switch**
+- Set all valid bits to 0
+- **Advantage**: Simple, works
+- **Disadvantage**: Next process incurs TLB misses for all pages → expensive if frequent context switches
+
+**Solution 2: Address Space Identifier (ASID)**
+- Add ASID field to each TLB entry
+- Hardware checks: `(VPN == entry.VPN) AND (ASID == entry.ASID)`
+- OS sets ASID register on context switch
+- **Advantage**: Processes can share TLB without confusion
+- **Disadvantage**: What if > 2^8 processes? (must flush some entries)
+
+**TLB with ASID**:
+```
+VPN | PFN | Valid | Prot | ASID
+ 10 | 100 |   1   | rwx  |  1    ← Process 1
+ 10 | 170 |   1   | rwx  |  2    ← Process 2 (no conflict!)
+```
+
+### TLB Replacement Policy
+
+**When TLB full and new entry needed, which to evict?**
+
+**LRU (Least Recently Used)**:
+- Evict entry not used for longest time
+- Exploits temporal locality
+- **Problem**: Pathological case with loop over n+1 pages in TLB of size n → 100% misses
+
+**Random**:
+- Evict random entry
+- Simple, avoids corner cases
+- Generally performs reasonably well
+
+### TLB Coverage and Performance
+
+**TLB coverage** = # entries × page size
+- Example: 64 entries × 4KB = 256KB coverage
+
+**Exceeding TLB coverage**:
+- Working set > TLB coverage → many TLB misses → severe performance penalty
+- **Solution**: Use **larger pages** for key data structures
+  - Maps more memory with same # of TLB entries
+  - Common in databases (large, randomly accessed data)
+
+**Culler's Law**: "RAM isn't always RAM"
+- Random memory access can be much slower if exceeds TLB coverage
+- Access cost varies depending on TLB hits/misses
+
+### Practice Questions with Answers
+
+**Q1: Why is a TLB necessary? What problem would exist without it?**
+
+**Answer:** Without a TLB, **every** memory access would require **two** memory accesses:
+1. Access page table in memory to get translation
+2. Access actual data at translated address
+This would make programs run **2x slower or worse**. The TLB caches translations so most accesses only need one memory reference (on TLB hit), making paging practical.
+
+**Q2: A TLB has 64 entries. A program accesses a 10-element integer array (4 bytes each) with 16-byte pages. The array starts at virtual address 100. Trace the TLB hits/misses for accessing all elements sequentially.**
+
+**Answer:**
+Array: `a[0]` at 100, `a[1]` at 104, ..., `a[9]` at 136
+- Page size = 16 bytes → 4 integers per page
+- `a[0], a[1], a[2], a[3]` on VPN 6 (bytes 96-111)
+- `a[4], a[5], a[6], a[7]` on VPN 7 (bytes 112-127)
+- `a[8], a[9]` on VPN 8 (bytes 128-143)
+
+Access pattern:
+- `a[0]`: **Miss** (load VPN 6)
+- `a[1], a[2], a[3]`: **Hit, Hit, Hit** (VPN 6 in TLB)
+- `a[4]`: **Miss** (load VPN 7)
+- `a[5], a[6], a[7]`: **Hit, Hit, Hit**
+- `a[8]`: **Miss** (load VPN 8)
+- `a[9]`: **Hit**
+
+**Result**: 3 misses, 7 hits → **70% hit rate** (spatial locality!)
+
+**Q3: What is the difference between hardware-managed and software-managed TLBs? Give an example architecture of each.**
+
+**Answer:**
+**Hardware-managed** (Intel x86, CISC):
+- Hardware walks page table on TLB miss
+- Hardware must know page table format and location
+- Faster (no trap overhead)
+- Less flexible (page table structure fixed)
+
+**Software-managed** (MIPS, SPARC, RISC):
+- TLB miss raises exception to OS
+- OS trap handler walks page table, updates TLB
+- Slower (trap overhead)
+- More flexible (OS can use any page table structure)
+
+**Q4: Explain how Address Space Identifiers (ASIDs) solve the context switch problem. Why is flushing the TLB on every context switch expensive?**
+
+**Answer:**
+**Without ASID**: Two processes with same VPN would conflict in TLB. Must flush entire TLB on context switch (set all valid bits to 0).
+- **Expensive**: Next process incurs TLB miss on every page access until TLB repopulated
+- Frequent context switches → many TLB misses → poor performance
+
+**With ASID**: Each TLB entry tagged with process ID (ASID field)
+- Hardware checks: match VPN **and** ASID
+- Processes can share TLB without confusion
+- No flush needed → much faster context switches
+
+**Q5: A system has 64-entry TLB with 4KB pages. Calculate TLB coverage. If a program's working set is 512KB, what will likely happen to performance?**
+
+**Answer:**
+- **TLB coverage** = 64 entries × 4KB = **256KB**
+- Working set (512KB) **exceeds** TLB coverage
+- Program will experience **many TLB misses** (exceeding TLB coverage)
+- **Severe performance penalty** - constant thrashing of TLB
+- **Solution**: Use larger pages (e.g., 2MB pages → 128MB coverage)
+
+**Q6: On a TLB hit, how many memory accesses are required? On a TLB miss?**
+
+**Answer:**
+- **TLB hit**: **1 memory access** (just the data itself; translation in TLB on-chip)
+- **TLB miss** (hardware-managed): **2 memory accesses**:
+  1. Access page table in memory to get PFN
+  2. Access actual data at translated address
+- **TLB miss** (software-managed): **2+ memory accesses**:
+  1. Access page table (may involve multiple levels)
+  2. Access actual data
+  Plus trap overhead
+
+**Q7: Explain the difference between temporal locality and spatial locality. How does each improve TLB performance?**
+
+**Answer:**
+**Spatial locality**: Memory locations **close together** accessed near in time
+- Example: Array elements `a[0], a[1], a[2]`
+- **TLB benefit**: Elements on same page share one translation → one TLB miss covers multiple accesses
+
+**Temporal locality**: Same memory location accessed **repeatedly over time**
+- Example: Loop variable, loop instructions
+- **TLB benefit**: Once translation in TLB, subsequent accesses to same page are hits
+
+Both reduce TLB misses, making paging efficient in practice.
+
+---
+
 ## Chapters 26/27: Introduction to Concurrency
 
 ### Why Concurrency?
