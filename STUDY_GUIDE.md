@@ -4,21 +4,34 @@
 
 ### Key Terms & Definitions
 - **Process**: A running program; the OS abstraction for execution
-- **Program**: Static code and data on disk
-- **Address Space**: Memory the process can access (code, stack, heap)
-- **Process API**: Create, destroy, wait, control, status operations
-- **Machine State**: What a program can read/update (memory, registers, PC, stack pointer, frame pointer)
+- **Program**: Lifeless bytes on disk (instructions + static data) waiting to run
+- **Address Space**: Memory the process can address (code, stack, heap)
+- **Machine State**: What a program can read/update when running:
+  - **Memory** (address space)
+  - **Registers** (PC/instruction pointer, stack pointer, frame pointer, general-purpose)
+  - **I/O information** (list of open files)
+- **Time Sharing**: OS shares CPU by running one process, stopping it, running another
+- **PCB (Process Control Block)**: Data structure storing process information
+
+### Process Creation Steps
+1. **Load** code and static data from disk into memory (eager or lazy)
+2. **Allocate** run-time stack (with argc/argv for main())
+3. **Allocate** heap (small initially, grows via malloc())
+4. **I/O setup**: Open 3 file descriptors (stdin, stdout, stderr)
+5. **Jump to main()**: Start program execution
 
 ### Process States
-1. **Running**: Executing on CPU
+1. **Running**: Executing instructions on CPU
 2. **Ready**: Ready to run but OS chose not to run it
-3. **Blocked**: Not ready (e.g., waiting for I/O)
+3. **Blocked**: Not ready until event occurs (e.g., waiting for I/O)
+4. **Embryo** (initial): Being created
+5. **Zombie** (final): Exited but not cleaned up; parent can check return code
 
 ### State Transitions
 - Ready → Running: **Scheduled**
 - Running → Ready: **Descheduled**
-- Running → Blocked: **I/O initiated**
-- Blocked → Ready: **I/O completion**
+- Running → Blocked: **I/O: initiate**
+- Blocked → Ready: **I/O: done**
 
 ### Practice Questions
 
@@ -48,59 +61,56 @@
 
 ### Key System Calls
 - **fork()**: Creates a new child process (copy of parent)
+  - Child doesn't start at main(), comes to life as if it called fork() itself
+  - Returns **0** to child, **child's PID** to parent, **-1** on failure
+  - Child gets copy of parent's address space and file descriptors
+
 - **exec()**: Transforms calling process into a different program
+  - Loads code and static data, overwrites current code segment
+  - Re-initializes heap and stack
+  - Does NOT create new process
+  - Does NOT return on success (old program is completely replaced)
+  - 6 variants on Linux: execl(), execlp(), execle(), execv(), execvp(), execvpe()
+
 - **wait()**: Parent waits for child to complete
-- **kill()**: Send signals to processes
-- **signal()**: Set up signal handlers
+  - Makes output deterministic (prevents nondeterministic scheduling)
+  - Prevents zombie processes
 
-### fork() Behavior
-- Returns **0** to child process
-- Returns **child's PID** to parent
-- Returns **-1** on failure
-- Child gets copy of parent's address space
+- **Nondeterminism**: CPU scheduler determines which process runs, making output order unpredictable without wait()
 
-### exec() Family
-- Loads new program into current process
-- Does NOT create new process
-- Does NOT return on success (old program is gone)
-- Common variants: execl(), execle(), execv(), execvp()
+### File Descriptors and Redirection
+- File descriptors remain **open across fork()** - child inherits parent's open files
+- File descriptors remain **open across exec()** - enables I/O redirection
+- UNIX searches for free file descriptors starting at **zero**
+- Shell uses this to redirect stdin/stdout before exec()
+
+### Separation of fork() and exec()
+- Allows shell to set up environment between fork and exec
+- Enables: I/O redirection, pipes, background jobs
+- Shell can manipulate child's file descriptors before running new program
 
 ### Practice Questions
 
-1. What does fork() return to the parent process? To the child?
+1. **What does fork() return to the parent process? To the child? On failure?**
+   - **Answer**: Parent receives child's PID, child receives 0, failure returns -1
 
-2. After fork(), how many processes are running? What is the relationship between them?
+2. **After fork(), does the child start executing at main()? Where does it start?**
+   - **Answer**: No, child comes to life as if it had called fork() itself, returning from fork() with value 0
 
-3. Why would you call fork() followed by exec()?
+3. **What happens to the heap, stack, and code segment when exec() is called successfully?**
+   - **Answer**: Code segment is overwritten with new program code, heap and stack are re-initialized. The old program is completely replaced.
 
-4. Write the typical pattern: parent forks a child, child runs `/bin/ls`, parent waits for completion.
+4. **Why do file descriptors remain open across exec()? How does this enable I/O redirection?**
+   - **Answer**: Keeping file descriptors open allows the shell to redirect stdin/stdout before exec(). Shell closes stdin, opens file (gets fd 0), then exec() - new program inherits redirected I/O.
 
-5. What happens if you call exec() without fork() first?
+5. **Explain why the separation of fork() and exec() is useful for shells.**
+   - **Answer**: Between fork() and exec(), the shell can modify the child's environment: set up pipes, redirect I/O, change working directory, etc., before running the new program.
 
-6. If fork() fails, what value does it return and why might it fail?
+6. **What is nondeterminism in process execution? How does wait() solve it?**
+   - **Answer**: Nondeterminism means the scheduler decides which process runs when, making output order unpredictable. wait() forces parent to wait until child completes, making execution deterministic.
 
-7. What is the purpose of wait() or waitpid()?
-
-8. If a parent doesn't call wait() on its child, what problem can occur?
-
-9. What happens to open file descriptors after fork()?
-
-10. Explain the output when this code runs:
-    ```c
-    printf("A");
-    fork();
-    printf("B");
-    ```
-
-11. What is a zombie process?
-
-12. What is an orphan process?
-
-13. How does the shell use fork() and exec() to run commands?
-
-14. Can a child process affect the parent's variables after fork()?
-
-15. What signal does kill() send by default?
+7. **What happens if you call exec() without fork() first?**
+   - **Answer**: The calling process is replaced by the new program. Useful in shells, but means you lose the original program entirely.
 
 ---
 
@@ -110,161 +120,204 @@
 **Direct Execution**: Run program directly on CPU (fast but problematic)
 **Limited Direct Execution**: OS restricts what programs can do via hardware support
 
+The **two central challenges**: (1) **Performance** - implement virtualization without excessive overhead, and (2) **Control** - run processes efficiently while retaining control over the CPU.
+
 ### Two Main Problems
-1. **Restricted Operations**: How to prevent user programs from doing whatever they want?
-2. **Switching Between Processes**: How does OS regain control of CPU?
+1. **Problem #1: Restricted Operations** - How to prevent user programs from doing whatever they want while still running efficiently?
+2. **Problem #2: Switching Between Processes** - How does OS regain control of CPU?
 
-### User Mode vs Kernel Mode
-- **User Mode**: Restricted; cannot issue I/O requests or privileged instructions
-- **Kernel Mode**: Full privileges; OS runs in this mode
-- **System Call**: User program requests OS to perform privileged operation
-- **Trap**: Enters kernel mode (raises privilege)
-- **Return-from-trap**: Returns to user mode (lowers privilege)
+### User Mode vs Kernel Mode (Protected Control Transfer)
+- **User Mode**: Restricted; cannot issue I/O requests or privileged instructions. Process would raise exception if it tried.
+- **Kernel Mode**: Full privileges; OS runs in this mode. Can issue I/O, execute all restricted instructions.
+- **Trap**: Special instruction that **simultaneously** jumps into kernel **and** raises privilege level to kernel mode
+- **Return-from-trap**: Special instruction that **simultaneously** returns to user program **and** reduces privilege level back to user mode
+- **Hardware saves registers** onto **per-process kernel stack** during trap
 
-### System Call Mechanism
-1. Program issues system call
-2. **Trap** into kernel (save registers, switch to kernel mode)
-3. OS handles request via **trap handler**
-4. OS executes **return-from-trap** (restore registers, switch to user mode)
-5. Program continues
+### Trap Table and System Calls
+- **Trap table** set up by OS **at boot time** (when machine boots in privileged/kernel mode)
+- OS informs hardware where trap handlers are located (syscall handler, timer handler, etc.)
+- Hardware remembers these locations until machine is rebooted
+- User code **cannot specify exact address** to jump to (security risk!)
+- Instead, **system-call number** is placed in register or stack
+- OS examines this number and executes corresponding code
+- This level of indirection provides **protection**
 
-### Timer Interrupt
-- Hardware timer interrupts CPU periodically
-- Gives OS chance to regain control
-- OS can decide to switch to different process (context switch)
+### Two Phases of Limited Direct Execution Protocol
 
-### Context Switch
-- OS saves register state of current process (PCB)
-- OS restores register state of next process (PCB)
-- Switch to new process's kernel stack
-- Return-from-trap returns to new process
+**Phase 1 @ Boot (kernel mode)**:
+- Initialize trap table (tell hardware where syscall handler, timer handler are)
+- Start timer interrupt
+
+**Phase 2 @ Run (kernel mode → user mode → kernel mode)**:
+- OS creates process entry, allocates memory, loads program, sets up user stack with argv
+- OS fills kernel stack with reg/PC
+- OS executes **return-from-trap** to start process in user mode
+- Process runs in user mode
+- Process traps back into OS (via system call or timer interrupt)
+- OS handles trap, then return-from-trap back to process
+
+### Regaining Control: Cooperative vs Non-Cooperative
+
+**Cooperative Approach** (old Mac OS, Xerox Alto):
+- OS **waits** for system calls or illegal operations
+- Process voluntarily gives up CPU via system calls or yield()
+- Problem: Infinite loop → must reboot machine!
+
+**Non-Cooperative Approach** (modern systems):
+- **Timer interrupt** - hardware timer programmed to raise interrupt every X milliseconds
+- When interrupt raised, currently running process is halted
+- Hardware saves registers, OS interrupt handler runs
+- OS regains control and can switch to different process
+- This is a **privileged operation** (starting/stopping timer)
+
+### Context Switch - TWO Types of Register Saves
+
+A context switch involves **two different types** of register saves/restores:
+
+1. **When timer interrupt occurs (hardware-driven)**:
+   - **User registers** of running process are **implicitly saved by hardware**
+   - Saved onto that process's **kernel stack**
+   - Hardware does this automatically
+
+2. **When OS decides to switch from A to B (software-driven)**:
+   - **Kernel registers** are **explicitly saved by software (OS)**
+   - Saved into **process structure** in memory (not stack)
+   - OS saves registers, PC, kernel stack pointer of process A
+   - OS restores registers, PC, kernel stack pointer of process B
+   - **By switching stacks**, kernel enters switch() in context of A, returns in context of B
+   - Return-from-trap then restores B and starts running it
 
 ### Practice Questions
 
-1. What does "Limited Direct Execution" mean?
+1. **What are the two main problems that Limited Direct Execution solves? What is the solution to each?**
+   - **Answer**: (1) Restricted Operations - solved using user mode/kernel mode and trap mechanism. (2) Switching Between Processes - solved using timer interrupt to regain control.
 
-2. Why does direct execution need to be "limited"?
+2. **Explain what happens during a trap instruction. What two things does it do simultaneously?**
+   - **Answer**: Trap simultaneously (1) jumps into the kernel at a pre-specified location in the trap table, and (2) raises the privilege level from user mode to kernel mode. Hardware also saves registers onto the per-process kernel stack.
 
-3. What are the advantages of unlimited direct execution? What are the problems?
+3. **Why can't user code specify an exact address to jump to when making a system call? What mechanism is used instead?**
+   - **Answer**: Allowing exact addresses would let malicious code jump anywhere in kernel (e.g., past permission checks), taking over the machine. Instead, user code places a system-call number in a register, and the OS uses the trap table to find the corresponding handler. This indirection provides protection.
 
-4. What is the difference between user mode and kernel mode?
+4. **Describe the two phases of the Limited Direct Execution protocol (boot time vs run time).**
+   - **Answer**: Boot time (kernel mode): OS initializes trap table, tells hardware where handlers are, starts timer. Run time: OS sets up process and uses return-from-trap to start it in user mode. Process runs, then traps back via syscall or timer interrupt. OS handles it and returns control.
 
-5. How does a user program perform a privileged operation (like reading from disk)?
+5. **What is the difference between cooperative and non-cooperative approaches to regaining CPU control? Why is the non-cooperative approach necessary?**
+   - **Answer**: Cooperative: OS waits for process to make system call or illegal operation. Problem: infinite loop means reboot. Non-cooperative: Timer interrupt forcibly interrupts process every X milliseconds, giving OS control. This prevents rogue processes from taking over the machine.
 
-6. What happens during a trap instruction?
+6. **During a context switch, there are TWO different types of register saves/restores. What are they and who performs each?**
+   - **Answer**: (1) When timer interrupt occurs: hardware implicitly saves user registers of running process onto its kernel stack. (2) When OS switches from process A to B: software (OS) explicitly saves kernel registers into process structure of A, then restores kernel registers from process structure of B.
 
-7. What happens during return-from-trap?
-
-8. How does the OS set up trap handlers? When does this happen?
-
-9. Why is a timer interrupt necessary for the OS?
-
-10. Without a timer interrupt, what could a malicious program do?
-
-11. Describe the complete flow when a program makes a system call to read a file.
-
-12. What is a context switch and when does it occur?
-
-13. What information must be saved during a context switch?
-
-14. How does the OS enforce limited direct execution?
-
-15. What is the trap table and when is it initialized?
-
-16. If a program runs a tight loop with no system calls, how does the OS regain control?
-
-17. What privilege level does user code run at? What about OS code?
-
-18. Why can't user programs directly access hardware?
-
-19. Explain the cooperative vs non-cooperative approach to regaining CPU control.
-
-20. What happens on boot with respect to trap handlers and timer interrupts?
+7. **How does switching kernel stacks enable a context switch? Explain the flow.**
+   - **Answer**: OS calls switch() routine while in context of process A (on A's kernel stack). switch() saves A's registers to A's process structure, restores B's registers from B's process structure, and switches to B's kernel stack. Now executing on B's stack. When switch() returns, it returns in context of B. Return-from-trap then resumes B in user mode.
 
 ---
 
 ## Chapter 7 & 8: Scheduling
 
-### Key Scheduling Algorithms
-
-**FIFO (First In First Out)**: Run jobs in order of arrival
-**SJF (Shortest Job First)**: Run shortest job first (non-preemptive)
-**STCF (Shortest Time-to-Completion First)**: Preemptive SJF
-**Round Robin (RR)**: Time slice each job in turns
-**MLFQ (Multi-Level Feedback Queue)**: Multiple queues with different priorities
-
 ### Key Metrics
-- **Turnaround Time**: T_completion - T_arrival
-- **Response Time**: T_first_run - T_arrival
-- **Average**: Sum of all times / number of jobs
+- **Turnaround Time**: T_turnaround = T_completion - T_arrival (performance metric)
+- **Response Time**: T_response = T_firstrun - T_arrival (interactivity metric)
+- **Trade-off**: Performance vs Fairness often at odds in scheduling
 
-### Visual: Process Scheduling Timeline
-```
-Jobs: A(100ms), B(10ms), C(10ms) all arrive at t=0
+### Basic Scheduling Algorithms
 
-FIFO:     |----A----|B|C|
-          0        100 110 120
-Avg Turnaround: (100+110+120)/3 = 110ms
+**FIFO (First In First Out)**:
+- Run jobs in order of arrival
+- Simple, easy to implement
+- **Problem**: **Convoy effect** - short jobs stuck behind long job (like cars behind slow truck)
 
-SJF:      |B|C|----A----|
-          0 10 20      120
-Avg Turnaround: (10+20+120)/3 = 50ms
+**SJF (Shortest Job First)**:
+- Run shortest job first (non-preemptive)
+- Optimal for turnaround time when all jobs arrive simultaneously
+- **Problem**: Still suffers convoy effect if short jobs arrive after long job starts
 
-Round Robin (time slice=10):
-|A|B|C|A|A|A|A|A|A|A|A|A|
-Avg Response: (0+10+20)/3 = 10ms
-```
+**STCF (Shortest Time-to-Completion First / Preemptive SJF)**:
+- Preempts currently running job when shorter job arrives
+- Any time new job enters, scheduler picks job with least time remaining
+- Optimal for turnaround time
+- **Problem**: Terrible for response time
+
+**Round Robin (RR)**:
+- Runs each job for time slice (scheduling quantum), then switches
+- Time slice must be multiple of timer-interrupt period
+- **Trade-off**: Shorter time slice = better response time BUT more context-switch overhead
+- **Amortization**: Longer time slices amortize context-switch cost (e.g., 1ms context switch + 100ms time slice = <1% overhead)
+- Excellent for response time
+- **Problem**: Terrible for turnaround time (stretches out every job)
+
+### Incorporating I/O
+- When job performs I/O, it's **blocked** waiting for completion
+- Scheduler should schedule another job during I/O
+- Treat each CPU burst as independent job
+- **Overlap**: CPU used by one process while waiting for I/O of another → better utilization
+
+### MLFQ (Multi-Level Feedback Queue)
+
+**Goal**: Schedule without perfect knowledge - optimize both turnaround time AND response time
+
+**Core Concept**: **Learn from history** to predict future behavior
+- Multiple queues, each with different priority level
+- Job on single queue at any time
+- MLFQ varies priority based on **observed behavior**
+  - Job repeatedly gives up CPU (interactive) → keep priority high
+  - Job uses CPU intensively → reduce priority
+
+**Five Rules of MLFQ**:
+1. If Priority(A) > Priority(B), A runs (B doesn't)
+2. If Priority(A) = Priority(B), A & B run in RR
+3. When job enters system, placed at **highest priority**
+4. Once job uses up **time allotment** at given level (regardless of how many times it gave up CPU), priority reduced
+5. After time period **S**, move **all** jobs to topmost queue (**priority boost**)
+
+**Allotment**: Amount of time job can spend at given priority level before scheduler reduces priority
+
+**Three Problems MLFQ Solves**:
+1. **Starvation**: Too many interactive jobs → long-running jobs never run
+   - **Solution**: Rule 5 (priority boost) guarantees all jobs make progress
+2. **Gaming**: Smart user issues I/O just before allotment expires to stay at high priority
+   - **Solution**: Rule 4 - better accounting tracks total time used at level
+3. **Changing behavior**: CPU-bound job becomes interactive
+   - **Solution**: Rule 5 allows job to regain high priority
+
+**Tuning MLFQ** ("voo-doo constants" - Ousterhout's Law):
+- How many queues?
+- Time slice per queue?
+- Allotment size?
+- Boost period S?
+- **Varying time slices**: High-priority queues get short slices (10ms), low-priority get longer slices (100s ms)
+
+**Real Implementations**:
+- Solaris: 60 queues, 20ms-few hundred ms slices, boost every ~1 second
+- BSD UNIX, Windows NT: use MLFQ variants
 
 ### Practice Questions with Answers
 
-**Q1: Given jobs A(50ms), B(30ms), C(20ms) arriving at t=0, calculate average turnaround time for SJF.**
+1. **What is the convoy effect? Give an example showing how SJF avoids it.**
+   - **Answer**: Convoy effect is when short jobs get stuck behind a long job, severely increasing average turnaround time. Example: Jobs A(100ms), B(10ms), C(10ms) arrive at t=0. FIFO: Avg turnaround = (100+110+120)/3 = 110ms (B and C wait for A). SJF runs B, C, A: Avg turnaround = (10+20+120)/3 = 50ms (more than 2× better).
 
-**Answer:**
-- Run order: C, B, A
-- C completes at 20ms (turnaround = 20)
-- B completes at 50ms (turnaround = 50)
-- A completes at 100ms (turnaround = 100)
-- Average = (20+50+100)/3 = **56.67ms**
+2. **Explain the fundamental trade-off between turnaround time and response time. Which schedulers optimize each?**
+   - **Answer**: Turnaround time (job completion) vs response time (interactivity) are at odds. To minimize turnaround, run shortest jobs first (unfair) - SJF/STCF optimize this. To minimize response, give all jobs quick turns (fair but stretches completion) - Round Robin optimizes this. Any fair scheduler hurts turnaround; any unfair scheduler hurts response.
 
-**Q2: What problem does STCF solve that SJF cannot handle?**
+3. **Jobs A(100ms) arrives at t=0, B(10ms) and C(10ms) arrive at t=10. Calculate average turnaround for STCF.**
+   - **Answer**:
+     - t=0-10: A runs (90ms left)
+     - t=10: B, C arrive and preempt A (shorter remaining time)
+     - t=10-20: B runs, completes (turnaround = 20-10 = 10ms)
+     - t=20-30: C runs, completes (turnaround = 30-10 = 20ms)
+     - t=30-130: A finishes (turnaround = 130-0 = 130ms)
+     - **Average = (130+10+20)/3 = 53.33ms**
 
-**Answer:** STCF is preemptive, so when a shorter job arrives, it can preempt the currently running job. SJF is non-preemptive and must wait for the current job to finish, leading to convoy effect when short jobs arrive after a long job has started.
+4. **In Round Robin, why does choosing time slice length involve a trade-off? What is amortization?**
+   - **Answer**: Shorter time slice = better response time (jobs run sooner) but more context-switch overhead wastes CPU. Longer time slice = amortizes context-switch cost across more work but hurts responsiveness. **Amortization**: Spreading fixed cost (context switch) over more work. Example: 1ms switch + 100ms slice = <1% overhead; 1ms switch + 10ms slice = 10% overhead.
 
-**Q3: Jobs A(100ms) arrives at t=0, B(10ms) arrives at t=10. Calculate average turnaround for FIFO vs STCF.**
+5. **How does MLFQ learn from history? Describe how it treats a new job vs a CPU-bound job.**
+   - **Answer**: MLFQ observes job behavior and adjusts priority accordingly. **New job**: Placed at highest priority (Rule 3), assuming it might be short/interactive. If it uses full time slices, priority drops (Rule 4), revealing it as CPU-bound. Eventually settles at low priority. **CPU-bound**: Stays at low priority with long time slices. This way MLFQ approximates SJF without knowing job lengths in advance.
 
-**Answer:**
-- **FIFO:** A finishes at 100, B finishes at 110
-  - Avg turnaround = ((100-0)+(110-10))/2 = (100+100)/2 = **100ms**
-- **STCF:** B preempts A at t=10, finishes at t=20, A finishes at t=120
-  - Avg turnaround = ((120-0)+(20-10))/2 = (120+10)/2 = **65ms**
+6. **Explain how a malicious user could game early MLFQ (without Rule 4 better accounting). How does Rule 4 prevent this?**
+   - **Answer**: **Gaming**: Issue I/O just before time slice expires (e.g., at 99% of slice). Old rules let job stay at high priority because it "voluntarily" gave up CPU. Repeat to monopolize CPU at high priority. **Rule 4 fix**: Tracks total time used at priority level. Whether job uses allotment in one burst or many small pieces doesn't matter - once allotment exhausted, priority drops. Can't game the system.
 
-**Q4: Why is Round Robin bad for turnaround time but good for response time?**
-
-**Answer:** RR gives every job a quick time slice, so all jobs start running quickly (good response time). However, jobs take longer to complete because they're constantly being switched out, increasing turnaround time. The overhead of context switching also adds to completion time.
-
-**Q5: In MLFQ, why do we periodically boost all jobs to the highest priority queue?**
-
-**Answer:** To prevent starvation of long-running jobs and to handle jobs that change behavior (e.g., from CPU-bound to interactive). Without boosting, a job that used up its time slices early would stay in low-priority queues forever, even if it becomes interactive later.
-
-**Q6: Three jobs arrive: A at t=0 (runtime=30), B at t=5 (runtime=20), C at t=10 (runtime=10). Using RR with time slice=10, when does each job complete?**
-
-**Answer:**
-```
-Timeline:
-0-10: A runs (20 left)
-10-20: B runs (10 left)
-20-30: C runs (done at 30)
-30-40: A runs (10 left)
-40-50: B runs (done at 50)
-50-60: A runs (done at 60)
-```
-- C completes at **30ms**
-- B completes at **50ms**
-- A completes at **60ms**
-
-**Q7: What is the convoy effect and which algorithm suffers from it?**
-
-**Answer:** Convoy effect occurs when short jobs get stuck behind a long job, like cars stuck behind a slow truck. **FIFO** suffers from this because if a long job arrives first, all subsequent short jobs must wait for it to complete, even though running the short jobs first would minimize average turnaround time.
+7. **Why does MLFQ need Rule 5 (priority boost)? What is a "voo-doo constant" and give an example from MLFQ.**
+   - **Answer**: **Rule 5 prevents**: (1) Starvation - ensures long-running jobs get some CPU time even with many interactive jobs, (2) Handles behavior changes - CPU-bound job that becomes interactive gets another chance at high priority. **Voo-doo constant**: Parameter requiring "black magic" to set correctly (Ousterhout's Law). Example: boost period **S** - too high → starvation; too low → interactive jobs don't get fair CPU. No perfect formula, requires experimentation/tuning.
 
 ---
 
@@ -350,15 +403,35 @@ Result: A runs 3 times, B runs 2 times (A has 2× tickets, runs ~2× more)
 
 ### Evolution of Memory Models
 
-1. **No Abstraction**: One program directly uses physical memory
-2. **Time Sharing**: OS switches processes in/out of memory (slow)
-3. **Address Space**: Each process has its own virtual memory view
+1. **Early Systems (No Abstraction)**:
+   - OS at physical address 0 (just a library)
+   - One program at physical address 64KB, uses rest of memory
+   - No protection, direct physical memory access
+
+2. **Multiprogramming**:
+   - Multiple processes **ready to run** at a given time
+   - OS switches between them (e.g., when one does I/O)
+   - **Goal**: Increase CPU utilization/efficiency
+
+3. **Time Sharing**:
+   - Multiple users wanting **interactivity** and timely response
+   - Processes **stay in memory** (not swapped to disk each switch)
+   - **Problem**: Protection becomes critical - need to prevent processes from accessing each other's memory
+
+4. **Address Space Abstraction**:
+   - Each process has its own **virtual memory view**
+   - Program thinks it starts at address 0 and has large address space
+   - Reality: loaded at arbitrary physical address(es)
+
+### The Crux of Memory Virtualization
+
+**How can the OS build this abstraction of a private, potentially large address space for multiple running processes (all sharing memory) on top of a single, physical memory?**
 
 ### Address Space Structure
 ```
 Virtual Memory Layout:
 0KB   ┌──────────────┐
-      │   Code       │  (Program instructions)
+      │   Code       │  (Program instructions - static)
       ├──────────────┤
       │   Heap       │  (malloc data, grows DOWN→)
       │      ↓       │
@@ -368,21 +441,40 @@ Virtual Memory Layout:
 16KB  └──────────────┘
 ```
 
+### Three Goals of Virtual Memory
+
+1. **Transparency**:
+   - VM should be **invisible** to the running program
+   - Program behaves as if it has its own private physical memory
+   - OS and hardware do all the work behind the scenes
+
+2. **Efficiency**:
+   - Make virtualization efficient in **time** (not making programs run much slower)
+   - Make virtualization efficient in **space** (not using too much memory for structures)
+   - Requires hardware support (e.g., TLBs for fast translation)
+
+3. **Protection/Isolation**:
+   - Protect processes from one another
+   - Protect OS from processes
+   - Process cannot access or affect memory outside its address space
+   - Each process runs in its own isolated cocoon
+
 ### Key Concepts
-- **Virtual Address**: What program sees (0KB to 16KB)
-- **Physical Address**: Actual location in RAM
+- **Virtual Address**: What program sees (0KB to 16KB) - **every address you see as a programmer is virtual**
+- **Physical Address**: Actual location in RAM where data really lives
 - **Address Translation**: Hardware+OS maps virtual → physical
 - **Isolation**: Each process thinks it owns all memory (0 to max)
 
 ### Practice Questions with Answers
 
-**Q1: Why do we need address spaces instead of letting programs use physical memory directly?**
+**Q1: What are the three goals of a virtual memory system and why is each important?**
 
 **Answer:**
-- **Isolation**: Prevents processes from accessing each other's memory (security/stability)
-- **Ease of use**: Program doesn't need to know where in physical RAM it will run
-- **Flexibility**: OS can move process in memory, swap to disk, without program knowing
-- **Protection**: OS can enforce read-only code sections, prevent stack overflows into heap
+1. **Transparency**: The OS should implement VM in a way that is **invisible** to the running program. The program shouldn't be aware that memory is virtualized; it behaves as if it has its own private physical memory.
+
+2. **Efficiency**: The OS should make virtualization efficient in both **time** (not making programs run much more slowly) and **space** (not using too much memory for VM structures). Time-efficient virtualization requires hardware support like TLBs.
+
+3. **Protection**: The OS must protect processes from one another and protect itself from processes. When a process performs a load, store, or instruction fetch, it should not be able to access memory outside its address space. This enables **isolation** - each process runs safely, isolated from other faulty or malicious processes.
 
 **Q2: A process has virtual addresses 0-16KB. Its code is at physical address 32KB. What physical address corresponds to virtual address 4KB?**
 
@@ -400,9 +492,14 @@ Virtual Memory Layout:
 - **Stack**: Function calls, local variables, grows upward
 - They're at opposite ends so both can grow without immediately colliding. This maximizes usable space before needing more memory.
 
-**Q4: In early time-sharing systems without address spaces, how did the OS switch between processes?**
+**Q4: Explain the difference between multiprogramming and time sharing. Why did time sharing make protection critical?**
 
-**Answer:** The OS would save the entire process memory to disk, load the next process's memory from disk into RAM, then run it. This was extremely slow due to I/O overhead, making multiprogramming inefficient.
+**Answer:**
+- **Multiprogramming**: Multiple processes are **ready to run** at a given time. The OS switches between them (e.g., when one performs I/O) to increase **CPU utilization**. This was about efficiency.
+
+- **Time Sharing**: Multiple users **concurrently** using a machine, each expecting **timely, interactive** response. Processes **stay in memory** while switching (not swapped to disk each time), making switching fast.
+
+- **Why protection became critical**: With time sharing, multiple programs **reside concurrently in memory**. Without protection, one process could read or write another process's memory, causing security/stability issues. This necessitated memory isolation via address spaces.
 
 **Q5: What does the OS need to set up when creating a process's address space?**
 
@@ -430,15 +527,358 @@ Virtual Memory Layout:
 16KB  └──────────────┘
 ```
 
+**Q7: You write a C program that prints a pointer to a heap-allocated variable and prints the address of main(). Are these virtual or physical addresses? Where do the values actually live in physical memory?**
+
+**Answer:**
+- **Every address you see as a programmer is virtual**. When you print a pointer in a C program, you're printing a virtual address.
+- The addresses printed (e.g., 0x1095afe50 for code, 0x1096008c0 for heap) are virtual addresses that give the illusion of where things are laid out.
+- **Only the OS and hardware know the real physical addresses**. The program might think it starts at virtual address 0, but it's actually loaded at some arbitrary physical address like 320KB.
+- The OS, with hardware support, translates every virtual address the program uses into the corresponding physical address to fetch/store the actual data.
+
+---
+
+## Chapter 14: Memory API
+
+### The Crux: How To Allocate And Manage Memory
+
+**In UNIX/C programs, understanding how to allocate and manage memory is critical in building robust and reliable software. What interfaces are commonly used? What mistakes should be avoided?**
+
+### Two Types of Memory
+
+**1. Stack Memory (Automatic Memory)**:
+- Allocations and deallocations managed **implicitly** by the compiler
+- Declaration: `int x;` inside a function
+- **Compiler handles everything**: Makes space on call, frees on return
+- **Limitation**: Data disappears when function returns
+- **Use**: Local variables, function parameters
+
+**2. Heap Memory**:
+- Allocations and deallocations **explicitly** handled by programmer
+- Uses `malloc()` to allocate, `free()` to deallocate
+- **Heavy responsibility**, cause of many bugs
+- **Advantage**: Long-lived memory that persists beyond function call
+- **Use**: Dynamic data structures, memory needed across function calls
+
+### The malloc() Call
+
+**Signature**: `void *malloc(size_t size);`
+
+**Usage**:
+```c
+#include <stdlib.h>
+
+int *x = (int *) malloc(sizeof(int));  // Allocate integer on heap
+```
+
+**Key points**:
+- Pass size in bytes using `sizeof()` operator
+- Returns pointer to allocated memory (or NULL on failure)
+- Returns `void *` (generic pointer), typically cast to appropriate type
+- **Library call**, not system call (built on top of brk/sbrk/mmap)
+- **Always check for NULL** to handle allocation failures
+
+**Important idioms**:
+- Integers: `int *x = malloc(sizeof(int));`
+- Arrays: `int *arr = malloc(10 * sizeof(int));`
+- Strings: `char *s = malloc(strlen(src) + 1);` (the +1 is for null terminator!)
+- Structs: `struct node *n = malloc(sizeof(struct node));`
+
+**Common mistake with sizeof()**:
+```c
+int *x = malloc(10 * sizeof(int));  // Array of 10 integers
+printf("%zu\n", sizeof(x));  // Prints 4 or 8 (size of pointer!)
+                             // NOT 40 (size of allocated memory)
+```
+
+### The free() Call
+
+**Signature**: `void free(void *ptr);`
+
+**Usage**:
+```c
+int *x = malloc(10 * sizeof(int));
+// ... use x ...
+free(x);  // Free the memory
+```
+
+**Key points**:
+- Takes **only** the pointer returned by malloc() (no size argument)
+- Size tracked internally by memory allocation library
+- **Must** free memory when done (or memory leak occurs)
+- Knowing **when**, **how**, and **if** to free is the hard part
+
+### Common Errors (The Deadly Seven)
+
+**1. Forgetting to Allocate Memory**
+```c
+char *src = "hello";
+char *dst;  // OOPS! Not allocated
+strcpy(dst, src);  // Segmentation fault!
+```
+**Fix**: `char *dst = malloc(strlen(src) + 1);`
+
+**2. Not Allocating Enough Memory (Buffer Overflow)**
+```c
+char *src = "hello";
+char *dst = malloc(strlen(src));  // TOO SMALL! (missing +1)
+strcpy(dst, src);  // Writes past allocated space
+```
+- Can cause security vulnerabilities
+- May appear to work but is incorrect
+- **Always allocate enough**: `malloc(strlen(src) + 1)` for strings
+
+**3. Forgetting to Initialize Allocated Memory**
+```c
+int *arr = malloc(10 * sizeof(int));
+// Forgot to initialize!
+printf("%d\n", arr[0]);  // Uninitialized read - unknown value
+```
+- Results in **uninitialized reads**
+- **Fix**: Initialize after allocating, or use `calloc()` which zeros memory
+
+**4. Forgetting to Free Memory (Memory Leak)**
+```c
+void func() {
+    int *x = malloc(sizeof(int));
+    // ... use x ...
+    // OOPS! Forgot to call free(x)
+}  // Memory leaked when function returns
+```
+- In **long-running programs** (servers, OS): eventually runs out of memory
+- In **short programs**: OS reclaims all memory when process exits
+- **Best practice**: Always free what you allocate (develop good habits!)
+
+**5. Freeing Memory Before Done (Dangling Pointer)**
+```c
+int *x = malloc(sizeof(int));
+free(x);
+*x = 10;  // OOPS! Using freed memory (dangling pointer)
+```
+- Can crash or corrupt memory
+- Free might let malloc() reuse that memory for something else
+
+**6. Freeing Memory Repeatedly (Double Free)**
+```c
+int *x = malloc(sizeof(int));
+free(x);
+free(x);  // OOPS! Double free
+```
+- Result is **undefined** (crashes common)
+- Memory allocation library gets confused
+
+**7. Calling free() Incorrectly (Invalid Free)**
+```c
+int *x = malloc(10 * sizeof(int));
+free(x + 5);  // OOPS! Not the pointer malloc returned!
+```
+- **Must** pass exact pointer returned by malloc()
+- Passing any other value → undefined behavior
+
+### Underlying OS Support
+
+**malloc() and free() are library calls**, not system calls. The memory allocation library manages space within your virtual address space, built on top of system calls:
+
+**brk / sbrk**:
+- Change location of program's **break** (end of heap)
+- `brk(addr)`: Set break to new address
+- `sbrk(increment)`: Increment break by given amount
+- **Never call directly** - used internally by malloc library
+
+**mmap()**:
+- Create **anonymous memory region** (not associated with file)
+- Can be treated like heap and managed
+- Provides alternative to brk/sbrk for memory allocation
+- Understanding basic role sufficient (not detailed parameters)
+
+**Two levels of memory management**:
+1. **OS level**: Gives memory to processes, reclaims when process exits
+2. **Library level**: malloc/free manage heap within process
+
+### Other Useful Calls
+
+**calloc()**:
+- Allocates memory **and zeroes it** before returning
+- Prevents uninitialized read errors
+- `int *arr = calloc(10, sizeof(int));` // 10 integers, all set to 0
+
+**realloc()**:
+- Resize previously allocated memory
+- Makes new larger region, copies old data, returns new pointer
+- `arr = realloc(arr, 20 * sizeof(int));` // Grow from 10 to 20 elements
+
+### Practice Questions with Answers
+
+**Q1: What is the difference between stack memory and heap memory? Give an example of when you would use each.**
+
+**Answer:**
+**Stack memory (automatic)**:
+- Managed **implicitly** by compiler
+- Allocated on function call, freed on return
+- Example: `int x;` inside function
+- **Use when**: Local variables, temporary data that doesn't need to persist beyond function
+
+**Heap memory**:
+- Managed **explicitly** by programmer with malloc()/free()
+- Persists until explicitly freed
+- Example: `int *x = malloc(sizeof(int));`
+- **Use when**: Data must persist beyond function call, size unknown at compile time, large data structures
+
+**Key difference**: Stack data **disappears** when function returns; heap data **persists** until freed.
+
+**Q2: What is wrong with this code? How would you fix it?**
+```c
+char *src = "hello";
+char *dst = malloc(strlen(src));
+strcpy(dst, src);
+```
+
+**Answer:**
+**Problem**: **Buffer overflow** - allocated only 5 bytes but "hello" needs 6 bytes (5 characters + 1 null terminator).
+
+**Fix**:
+```c
+char *dst = malloc(strlen(src) + 1);  // +1 for null terminator!
+strcpy(dst, src);
+```
+
+The `+1` is critical for the null terminator `'\0'` that marks the end of C strings. Without it, strcpy writes one byte past the allocated space.
+
+**Q3: Explain the memory leak in this code. Is it a problem if the program runs for 1 second? What if it runs for 1 year?**
+```c
+void process_data() {
+    int *data = malloc(1000 * sizeof(int));
+    // ... process data ...
+    // Forgot to call free(data)
+}
+
+int main() {
+    while (1) {
+        process_data();  // Called repeatedly
+    }
+}
+```
+
+**Answer:**
+**Memory leak**: Each call to `process_data()` allocates 4KB (1000 × 4 bytes) but never frees it. The allocated memory is lost when the function returns.
+
+**Short program (1 second)**: Not a major problem. When the process exits, the **OS reclaims all memory** (both leaked and properly managed). No memory is truly "lost" to the system.
+
+**Long-running program (1 year)**: **Huge problem!** This server/daemon will continuously leak 4KB per call. Eventually runs out of memory and crashes. This is why **long-running programs** (web servers, databases, operating systems) must be extremely careful about memory leaks.
+
+**Fix**: Add `free(data);` before returning from `process_data()`.
+
+**Q4: What happens when you call free() on a pointer that was not returned by malloc()? What about calling free() twice on the same pointer?**
+
+**Answer:**
+**Invalid free** (pointer not from malloc):
+```c
+int x = 5;
+free(&x);  // WRONG! x is on stack, not heap
+```
+- **Undefined behavior** - can crash, corrupt memory allocator state
+- Must **only** pass pointers returned by malloc() to free()
+
+**Double free**:
+```c
+int *x = malloc(sizeof(int));
+free(x);
+free(x);  // WRONG! Already freed
+```
+- **Undefined behavior** - memory allocator gets confused
+- Common outcome: **crash**
+- Allocator might try to add same memory to free list twice
+
+**Q5: Why do we use sizeof(type) instead of hardcoding sizes like 4 or 8 when calling malloc()?**
+
+**Answer:**
+**Portability**: Type sizes vary across architectures
+- 32-bit system: `sizeof(int)` = 4, `sizeof(int *)` = 4
+- 64-bit system: `sizeof(int)` = 4, `sizeof(int *)` = 8
+
+**Example problem**:
+```c
+int *x = malloc(4);  // BAD! Hardcoded size
+```
+- Works on 32-bit, but pointer is 8 bytes on 64-bit → too small!
+
+**Correct approach**:
+```c
+int *x = malloc(sizeof(int));  // GOOD! Always correct size
+```
+
+Using `sizeof()` makes code **portable** across different architectures and resilient to type changes.
+
+**Q6: What is a dangling pointer and how can it cause problems?**
+
+**Answer:**
+**Dangling pointer**: A pointer to memory that has been freed
+
+**Example**:
+```c
+int *x = malloc(sizeof(int));
+*x = 42;
+free(x);  // Memory freed
+printf("%d\n", *x);  // Dangling pointer dereference!
+```
+
+**Problems**:
+1. **Undefined behavior** - might print 42, might print garbage, might crash
+2. **Use-after-free**: If malloc() reuses that memory for something else, you're now reading/writing someone else's data
+3. **Security vulnerabilities**: Attackers can exploit use-after-free bugs
+
+**Prevention**:
+- Set pointer to NULL after freeing: `free(x); x = NULL;`
+- Don't use pointers after freeing the memory they point to
+
+**Q7: Explain the relationship between malloc()/free() and the OS. Are they system calls?**
+
+**Answer:**
+**malloc()/free() are NOT system calls** - they are **library calls** (part of C standard library).
+
+**How it works**:
+1. **Library level**: malloc()/free() manage the **heap** within your process's virtual address space
+   - Track which regions are allocated/free
+   - Satisfy allocation requests from existing heap space when possible
+
+2. **OS level**: When library needs more memory, it calls OS system calls:
+   - **brk/sbrk**: Grow the heap by moving the program break
+   - **mmap()**: Create new memory regions
+
+3. **When process exits**: OS reclaims **all** process memory (code, stack, heap) regardless of whether you called free()
+
+**Why this matters**:
+- malloc/free are **fast** (no system call overhead most of the time)
+- OS system calls only needed occasionally when heap grows
+- Two-level management: library handles small allocations efficiently, OS handles process-level memory
+
 ---
 
 ## Chapter 15: Address Translation
 
+### The Crux: How to Efficiently and Flexibly Virtualize Memory
+
+**How can we build an efficient virtualization of memory? How do we provide the flexibility needed by applications? How do we maintain control over which memory locations an application can access? How do we do all of this efficiently?**
+
+### Hardware-Based Address Translation
+
+- **Address translation**: Hardware transforms each memory access (instruction fetch, load, store)
+- Changes **virtual address** (from program) → **physical address** (where data actually is)
+- Happens on **every memory reference** performed by hardware
+- OS sets up hardware correctly, then hardware does translation with no OS intervention
+- **Interposition**: Hardware interposes on each memory access to translate addresses transparently
+
 ### Base and Bounds (Dynamic Relocation)
 
-**Hardware Registers (per-CPU):**
+**Introduced in late 1950s time-sharing machines**
+
+**Assumptions** (simplified):
+1. Address space placed **contiguously** in physical memory
+2. Address space size **< physical memory** size
+3. All address spaces are **exactly the same size**
+
+**Hardware Registers (per-CPU, part of MMU):**
 - **Base register**: Start of physical memory for process
-- **Bounds register**: Size of address space
+- **Bounds register** (also called limit): Size of address space
 
 **Translation Formula:**
 ```
@@ -476,9 +916,19 @@ Physical Memory (actual RAM):
 - Raises exception if out of bounds
 
 **OS:**
-- Sets base/bounds registers during context switch
-- Handles exceptions (e.g., kills process on seg fault)
-- Manages free memory (which physical regions are free)
+- **On process creation**: Find space for address space using **free list** (data structure tracking free physical memory ranges)
+- **On process termination**: Reclaim memory, add back to free list
+- **On context switch**: Save/restore base and bounds registers to/from PCB (Process Control Block)
+- **Exception handling**: Terminate processes that access out-of-bounds memory
+
+### Key Problem: Internal Fragmentation
+
+**Base and bounds wastes memory** due to **internal fragmentation**:
+- Process allocated from base to base+bounds (e.g., 32KB to 48KB = 16KB)
+- But only **code, heap, stack** are actually used
+- **Large gap between heap and stack** is wasted but still allocated
+- This unused space **inside** the allocated unit is "fragmented" → internal fragmentation
+- Solution: **Segmentation** (next chapter) - separate base/bounds for each segment
 
 ### Practice Questions with Answers
 
@@ -535,13 +985,24 @@ These contain virtual addresses that get translated by the MMU.
 
 ## Chapter 16: Segmentation
 
-### Problem with Base & Bounds
+### The Crux: How to Support a Large Address Space
+
+**How do we support a large address space with (potentially) a lot of free space between the stack and the heap?** A 32-bit address space is 4GB, but a typical program only uses megabytes. Base and bounds would waste physical memory on the unused gap.
+
+### Problem with Base & Bounds: Internal Fragmentation
 - Wastes memory (internal fragmentation)
 - If heap and stack are small, large gap between them is unused but still allocated
+- Entire address space must be contiguous in physical memory
+- Not flexible enough for **sparse address spaces**
 
 ### Segmentation = Generalized Base & Bounds
-- Separate base & bounds for each **segment** (code, heap, stack)
-- Each segment can be placed independently in physical memory
+
+**Old idea from early 1960s**: Instead of one base/bounds pair for entire address space, have base/bounds pair **per logical segment**.
+
+- **Segment**: Contiguous portion of address space of particular length
+- Typical segments: **code, heap, stack**
+- Each segment can be placed **independently** in physical memory
+- Only **used** memory is allocated → avoids internal fragmentation between heap and stack
 
 ### Segment Registers (per-process)
 ```
@@ -574,6 +1035,60 @@ Virtual Address Space:          Physical Memory:
                       └──────→│ Stack (2KB) │ 28KB
                               └─────────────┘
 ```
+
+### Which Segment? Two Approaches
+
+**Explicit Approach** (VAX/VMS):
+- Use **top bits** of virtual address to select segment
+- Example: 14-bit address → top 2 bits select segment (00=code, 01=heap, 11=stack), bottom 12 bits = offset
+- Hardware: `Segment = (VirtualAddress & SEG_MASK) >> SEG_SHIFT`
+- Limitation: Each segment limited to maximum size (e.g., 4KB with 2-bit selector in 16KB space)
+
+**Implicit Approach**:
+- Hardware determines segment by **how address was formed**
+- From PC (instruction fetch) → code segment
+- From stack/base pointer → stack segment
+- Other → heap segment
+
+### Code Sharing and Protection Bits
+
+**Protection bits** per segment:
+- **Read**, **Write**, **Execute** permissions
+- Code segment: **Read-Execute** (not writable)
+- Heap/Stack: **Read-Write** (not executable)
+
+**Code sharing**:
+- Set code segment to read-only
+- Same physical code segment can be **shared across multiple processes**
+- Each process thinks it has private memory, OS secretly shares read-only code
+- Saves memory while preserving isolation
+
+### External Fragmentation: The KEY Problem
+
+**External fragmentation**: Physical memory becomes full of little holes of free space, making it difficult to allocate new segments or grow existing ones.
+
+Example:
+- Physical memory has 24KB free in three non-contiguous chunks (8KB, 8KB, 8KB)
+- Process requests 20KB segment
+- **Cannot satisfy** request even though total free space (24KB) > request (20KB)
+- Free space is **fragmented** into pieces too small
+
+**Solutions** (none perfect - "if 1000 solutions exist, no great one does"):
+1. **Compaction**: Rearrange segments to create contiguous free space
+   - Stop processes, copy data, update segment registers
+   - **Expensive**: memory-intensive, uses CPU time
+2. **Free-list algorithms**: Best-fit, worst-fit, first-fit, buddy algorithm
+   - Try to minimize fragmentation
+   - External fragmentation still exists
+
+### OS Responsibilities with Segmentation
+
+1. **Context switch**: Save/restore all segment registers (base + bounds for each segment) to/from PCB
+2. **Segment growth**: Handle `malloc()`/`sbrk()` system calls to grow heap
+   - Update segment size register if space available
+   - May reject if no physical memory available
+3. **Managing free space**: Find physical memory for segments using free list
+4. **Exception handling**: Handle segmentation faults (out-of-bounds access)
 
 ### Per-Process vs Common to All
 - **Per-process**: Segment registers (base/bounds), page tables
@@ -621,31 +1136,116 @@ Virtual Address Space:          Physical Memory:
 - **Per-process**: Segment registers, page tables, PCB, register state, address space
 - **Shared/Global**: OS code, physical memory allocator, device drivers, CPU hardware, trap table
 
+**Q7: Explain external fragmentation in segmentation. Why is it a problem and what are potential solutions?**
+
+**Answer:**
+- **External fragmentation**: Physical memory gets full of small holes of free space between segments
+- **Problem**: May have enough total free space (e.g., 24KB) but not contiguous
+  - Cannot satisfy allocation request (e.g., 20KB) even though total free > requested
+  - Free space is in non-contiguous pieces (e.g., three 8KB chunks)
+- **Solutions**:
+  1. **Compaction**: Rearrange segments to create large contiguous free region (expensive - requires copying, updating registers)
+  2. **Better allocation algorithms**: Best-fit, worst-fit, first-fit (minimize but don't eliminate fragmentation)
+  3. **Ultimate solution** (next chapters): Avoid variable-sized allocations entirely → use **paging**
+
 ---
 
 ## Chapter 17: Free Space Management
 
+### The Crux: How to Manage Free Space
+
+**How should free space on the heap be managed, when satisfying variable-sized requests? What strategies can be used to minimize fragmentation? What are the time and space overheads of alternate approaches?**
+
 ### Problem: External Fragmentation
-- Free space chopped into little pieces
+- Free space chopped into little pieces of **varying sizes**
 - Can't satisfy large allocation even if total free space is sufficient
+- Applies to **variable-sized units** (like malloc/free with segments)
+- Fixed-size units (like paging) **do not** suffer from external fragmentation
 
-### Free List Strategies
+### Low-Level Mechanisms
 
-**Best Fit**: Find smallest block that fits (minimizes wasted space)
-**Worst Fit**: Find largest block (leaves bigger leftover chunk)
-**First Fit**: Find first block that fits (fast)
-**Next Fit**: Like first fit, but start from last allocation
+**Splitting**: When requested size < free block size
+- Allocate requested amount
+- Return remaining space to free list
 
-### Splitting and Coalescing
+**Coalescing**: When freeing memory
+- Look at addresses of adjacent blocks
+- Merge newly freed space with adjacent free chunks
+- Returns larger free block to list
 
-**Splitting**: If block is too large, split it
+**Tracking allocated region size**: Use **header**
+- Located **immediately before** the handed-out memory chunk
+- Contains at minimum: **size** of allocated region
+- When `free(ptr)` called, library examines header at `ptr - sizeof(header)` to find size
+- **Magic number** often included for integrity checking
+
+**Embedding free list in free space itself**:
+- Free list pointers stored **inside** the free chunks themselves
+- When chunk is free, use it to store `next` pointer
+- When allocated, data overwrites the pointers (they're not needed)
+- **Zero overhead** when chunk is allocated
+
+### Basic Allocation Strategies
+
+**Best Fit**: Search list, find smallest block that fits
+- Minimizes wasted space
+- **Exhaustive search** → slow
+
+**Worst Fit**: Find largest block, return requested amount
+- Leaves bigger leftover chunks (may be more useful)
+- **Exhaustive search** → slow
+- Still high fragmentation
+
+**First Fit**: Find first block that fits
+- **Fast** (stops at first match)
+- Pollutes beginning of free list with small objects
+
+**Next Fit**: Like first fit, but start from **last allocation point**
+- Spreads searches more uniformly
+- Similar performance to first fit
+
+### Advanced Approaches
+
+**Segregated Lists**:
+- Keep **separate lists** for popular-sized objects
+- Example: one list for 8-byte allocations, another for 16-byte, etc.
+- Request for N bytes → check N-byte-specific list first
+- If empty, fall back to general allocator
+- **Benefits**: Fast allocation for common sizes, reduces fragmentation
+- **Slab allocator** is a modern segregated list approach
+
+**Slab Allocator** (Jeff Bonwick, Solaris kernel):
+- Allocates **object caches** for kernel objects (locks, file-system inodes, etc.)
+- When kernel boots: creates object caches (pools) for each kernel object type
+- Requests go to specific object cache
+- When cache runs low, requests **slabs** of memory from general allocator
+- **Benefits**:
+  - No fragmentation (objects same size within cache)
+  - Fast allocation/free (free objects immediately reusable)
+  - Pre-initialized objects (constructor called once)
+
+**Buddy Allocation** (Binary Buddy Allocator):
+- Memory divided using **binary tree** structure
+- Free memory starts as one big block (e.g., 64KB)
+- When request comes in, recursively divide block in **half** until block just big enough
+- Example: 7KB request from 64KB
+  - Divide 64→32→16→8 (8KB buddy blocks)
+  - Allocate one 8KB, mark buddy as free
+- **Coalescing**: When freeing, check if **buddy** is free → merge back
+  - Buddy address: flip bit in address at recursion level
+- **Benefits**: Fast coalescing (buddy address easily calculated)
+- **Drawbacks**: Internal fragmentation (7KB request wastes ~1KB)
+
+### Visual Examples
+
+**Splitting** example:
 ```
 Request 10 bytes from 30-byte block:
 Before: [30 bytes free]
 After:  [10 allocated][20 free]
 ```
 
-**Coalescing**: Merge adjacent free blocks
+**Coalescing** example:
 ```
 Free block A, then B (adjacent):
 Before: [A: used][B: used][C: free]
@@ -694,48 +1294,173 @@ Can't merge 100 with 60 because 50-byte used block separates them.
 
 **Answer:** External fragmentation creates many small, non-contiguous free blocks. Even if their total size is 100KB, you can't satisfy a 50KB request if the largest contiguous block is only 10KB. Memory is fragmented into unusable pieces.
 
-**Q5: Free list: [30B][10B][25B][40B]. Request 15B using Best Fit. Then request 8B using First Fit. Show final state.**
-
-**Answer:**
-Step 1 (15B, Best Fit):
-- Best fit is 25B (smallest ≥15B)
-- After: [30B free][10B free][15B used][10B free][40B free]
-
-Step 2 (8B, First Fit):
-- First fit is first 30B block
-- After: [8B used][22B free][10B free][15B used][10B free][40B free]
-
-**Q6: What is the purpose of the header in each allocated block?**
+**Q5: What is the purpose of the header in each allocated block, and how does it enable free()?**
 
 **Answer:** The header stores metadata:
 - **Size** of the block (needed for free() to know how much to free)
 - **Allocation status** (allocated or free)
-- Optional: pointers to next/prev free blocks (for free list)
-When user calls free(ptr), the allocator reads the header just before ptr to find the size.
+- **Magic number** for integrity checking
+- Located **immediately before** the returned pointer
+When user calls `free(ptr)`, the library examines the header at `ptr - sizeof(header)` to determine how much memory to return to the free list.
 
-**Q7: Calculate: If header=8 bytes and user requests 24 bytes, how much total space is allocated?**
+**Q6: Explain how segregated lists improve allocation performance. What is the slab allocator?**
 
 **Answer:**
-- Header: 8 bytes
-- User data: 24 bytes
-- **Total: 32 bytes** allocated from heap
+**Segregated lists**:
+- Maintain **separate free lists** for popular object sizes (e.g., 8B list, 16B list, 64B list)
+- Allocation for N bytes → check N-byte list first (fast, O(1) if available)
+- If empty, request from general allocator
+- **Benefits**: Reduces fragmentation, fast allocation for common sizes
+
+**Slab allocator** (Bonwick, Solaris):
+- Specialized segregated list for **kernel objects** (inodes, locks, process descriptors)
+- Pre-allocates **object caches** (slabs) for each type
+- Objects pre-initialized with constructor
+- **Benefits**: Zero fragmentation within cache, very fast alloc/free, no initialization overhead
+
+**Q7: A buddy allocator has 64KB free. Request 7KB. Show the splitting process and calculate internal fragmentation.**
+
+**Answer:**
+Buddy allocation uses **binary splitting**:
+1. Start: 64KB free
+2. Need ≥7KB → split: 64KB → 32KB + 32KB
+3. Need ≥7KB → split left: 32KB → 16KB + 16KB
+4. Need ≥7KB → split left: 16KB → 8KB + 8KB
+5. Allocate one 8KB block (just fits 7KB request)
+
+**Result**:
+- Allocated: 8KB
+- Used: 7KB
+- **Internal fragmentation**: 8KB - 7KB = **1KB wasted**
+
+Free structure: [8KB allocated][8KB free buddy][16KB free][32KB free]
 
 ---
 
-## Chapters 18/19/20: Paging
+## Chapter 18: Introduction to Paging
+
+### The Crux: How to Virtualize Memory with Pages
+
+**How can we virtualize memory with pages, so as to avoid the problems of segmentation? What are the basic techniques? How do we make those techniques work well, with minimal space and time overheads?**
 
 ### Core Concept
-- Divide address space into fixed-size **pages** (virtual)
-- Divide physical memory into fixed-size **page frames** (physical)
-- Page size = Frame size (typically 4KB)
 
-### Address Translation
+**Paging** - second approach to space management (from **Atlas system**, early 1960s):
+- Chop space into **fixed-sized pieces** (not variable-sized like segmentation)
+- Divide address space into fixed-size **pages** (virtual memory)
+- Divide physical memory into fixed-size **page frames** (physical memory)
+- Page size = Frame size (typically 4KB)
+- Each frame can contain exactly one virtual page
+
+### Advantages Over Segmentation
+
+1. **No external fragmentation**:
+   - Fixed-size units mean any page can fit in any free frame
+   - No need to worry about fragmentation of free space
+
+2. **Flexibility**:
+   - Support sparse address spaces easily
+   - No assumptions about heap/stack growth direction
+   - Process can use address space however it wants
+
+### Page Table
+
+**Per-process data structure** that stores address translations:
+- Maps virtual page numbers (VPN) to physical frame numbers (PFN)
+- **One page table per process** in the system
+- **Linear page table** = simple array structure
+  - OS indexes array by VPN
+  - Looks up page table entry (PTE) at that index
+  - Extracts PFN from the PTE
+
+**Where stored**:
+- **In memory** (managed by OS), NOT in MMU hardware
+- Too big for special on-chip hardware
+- Example: 32-bit address space, 4KB pages
+  - 20-bit VPN (2²⁰ = ~1 million entries)
+  - 4 bytes per PTE
+  - **4MB per page table!**
+  - 100 processes = 400MB just for page tables
+
+**Page-table base register (PTBR)**:
+- Hardware register containing physical address of page table start
+- Used to locate page table for address translation
+
+### Page Table Entry (PTE) Contents
+
+Each PTE contains several bits:
+
+1. **Valid bit**: Is this translation valid?
+   - Invalid pages generate trap to OS (likely terminate process)
+   - Supports sparse address spaces (mark unused pages invalid)
+
+2. **Protection bits**: Read/Write/Execute permissions
+   - Can page be read from? Written to? Executed?
+   - Violation generates trap to OS
+
+3. **Present bit**: Is page in physical memory or swapped to disk?
+   - Used for swapping (covered in later chapters)
+
+4. **Dirty bit**: Has page been modified since loaded into memory?
+   - Used for page replacement decisions
+
+5. **Reference/Accessed bit**: Has page been accessed?
+   - Tracks popular pages for replacement policies
+
+6. **PFN (Physical Frame Number)**: The actual translation
+   - Also called PPN (Physical Page Number)
+
+### Address Translation Process
+
+**Virtual address breakdown**:
 ```
 Virtual Address = [VPN | Offset]
-                   ↓
-              Page Table (indexed by VPN)
-                   ↓
-              [PFN | Offset] = Physical Address
+```
+- VPN bits = log₂(# virtual pages)
+- Offset bits = log₂(page size)
+
+**Translation steps**:
+1. Extract VPN from virtual address: `VPN = (VA & VPN_MASK) >> SHIFT`
+2. Find PTE address: `PTEAddr = PTBR + (VPN × sizeof(PTE))`
+3. Fetch PTE from memory: `PTE = Memory[PTEAddr]`
+4. Check valid bit and protection bits
+5. Extract PFN from PTE
+6. Form physical address: `PA = (PFN << SHIFT) | offset`
+
+**Note**: Offset stays the same (not translated)
+
+### The Two Problems with Paging
+
+1. **Too Slow**:
+   - Every memory access requires **TWO** memory accesses:
+     - One to fetch PTE from page table
+     - One to fetch actual data
+   - Can slow down process by **factor of 2 or more**
+   - Solution: TLB (Chapter 19)
+
+2. **Too Much Memory**:
+   - Page tables consume large amounts of memory
+   - 32-bit address space with 4KB pages = 4MB per process
+   - Wasted on page table instead of useful application data
+   - Solution: Advanced page table structures (Chapter 20)
+
+### Visual: Address Translation Example
+
+**Example from textbook** (64-byte address space, 16-byte pages):
+```
+Virtual address 21 = binary 010101
+
+VPN (top 2 bits)  offset (bottom 4 bits)
+      01      |        0101
+      ↓       |          ↓
+   VPN = 1    |    offset = 5 (5th byte of page)
+
+Page table lookup: VPN 1 → PFN 7 (binary 111)
+
+Physical address:
+      111     |        0101
+   PFN = 7    |    offset = 5
+   = 1110101 binary = 117 decimal
 ```
 
 ### Calculations
@@ -744,123 +1469,779 @@ Virtual Address = [VPN | Offset]
 - **VPN bits** = log₂(# virtual pages)
 - **PFN bits** = log₂(# physical frames)
 - **Offset bits** = log₂(page size)
-
-### TLB (Translation Lookaside Buffer)
-- **Hardware cache** of recent VPN→PFN translations
-- **TLB Hit**: Translation in TLB (fast, no memory access)
-- **TLB Miss**: Must walk page table in memory (slow)
-- **Hit Rate** = Hits / (Hits + Misses)
-
-### Visual: Paging
-```
-Virtual Address: [VPN=2][Offset=100]
-                     ↓
-Page Table:    [0→5][1→3][2→7][3→2]
-                            ↓
-Physical Address: [PFN=7][Offset=100]
-
-Physical Memory:
-Frame 0: [...]
-Frame 1: [...]
-...
-Frame 7: [page 2's data] ← our access at offset 100
-```
-
-### Hardware vs Software
-- **RISC (Software TLB)**: TLB miss → trap to OS handler (software walks page table)
-- **CISC (Hardware TLB)**: TLB miss → hardware walks page table automatically
+- **Page table size** = # Virtual Pages × sizeof(PTE)
 
 ### Practice Questions with Answers
 
-**Q1: 32-bit virtual address space, 16GB physical memory, 4KB pages. Calculate VPN bits, PFN bits, offset bits.**
+**Q1: What are the two main advantages of paging over segmentation?**
 
 **Answer:**
-- Page size = 4KB = 2^12 → **Offset = 12 bits**
-- Virtual space = 2^32 bytes → # pages = 2^32 / 2^12 = 2^20 → **VPN = 20 bits**
-- Physical = 16GB = 2^34 bytes → # frames = 2^34 / 2^12 = 2^22 → **PFN = 22 bits**
+1. **No external fragmentation**: Fixed-size units (pages/frames) mean any free frame can hold any page. No fragmentation of free space into unusable holes.
+2. **Flexibility**: Supports sparse address spaces easily. No assumptions about how process uses memory (heap/stack growth direction). Mark unused pages as invalid without allocating physical memory.
 
-**Q2: TLB has 100 hits and 20 misses. Calculate hit rate.**
+**Q2: 32-bit virtual address space, 4KB pages. Calculate: (a) how many virtual pages, (b) VPN bits, (c) offset bits, (d) linear page table size.**
 
 **Answer:**
-- Total accesses = 100 + 20 = 120
-- Hit rate = 100/120 = **83.3%**
+- Page size = 4KB = 2¹² bytes
+- (a) # virtual pages = 2³² / 2¹² = **2²⁰ pages** (~1 million)
+- (b) VPN bits = log₂(2²⁰) = **20 bits**
+- (c) Offset bits = log₂(2¹²) = **12 bits**
+- (d) Page table size = 2²⁰ entries × 4 bytes/PTE = **4MB**
 
 **Q3: Page table for process: VPN 0→PFN 4, VPN 1→PFN 7, VPN 2→PFN 1. Page size=1KB. Translate virtual address 1200.**
 
 **Answer:**
-- 1200 bytes = 1KB + 176 bytes
+- Page size = 1KB = 1024 bytes
 - VPN = 1200 / 1024 = **1**, Offset = 1200 % 1024 = **176**
-- Page table: VPN 1 → PFN 7
-- Physical = (7 × 1024) + 176 = 7168 + 176 = **7344**
+- Page table lookup: VPN 1 → PFN 7
+- Physical address = (PFN × page size) + offset = (7 × 1024) + 176 = **7344**
 
-**Q4: Why do we need a TLB? What problem does it solve?**
-
-**Answer:** Without TLB, every memory access requires two memory accesses: one to read the page table entry, one to access actual data. This doubles memory access time. TLB caches recent translations so most accesses only require one memory access (on TLB hit), dramatically improving performance.
-
-**Q5: 64-entry TLB, 4KB pages. Program accesses addresses 0, 4096, 8192, 4096, 0. Assume empty TLB initially. How many hits/misses?**
+**Q4: List and explain three bits found in a typical page table entry (PTE).**
 
 **Answer:**
+1. **Valid bit**: Indicates if translation is valid. If 0, page is not in use → accessing it traps to OS (segmentation fault). Allows sparse address spaces.
+2. **Protection bits (R/W/X)**: Specifies whether page can be read, written, or executed. Prevents code from being written to, data from being executed.
+3. **Dirty bit**: Tracks if page has been modified since loaded. Used for page replacement—clean pages don't need to be written back to disk.
+(Others: Present bit for swapping, Reference/Accessed bit for replacement policies)
+
+**Q5: Why does paging cause the system to run "too slowly"? Explain with a specific example.**
+
+**Answer:**
+Every memory access requires **TWO** memory accesses:
+1. Access page table in memory to fetch PTE (get PFN for translation)
+2. Access actual data at translated physical address
+
+Example: `mov 0x1000, %eax`
+- Access 1: Fetch PTE for VPN of 0x1000 from page table in memory
+- Access 2: Fetch data at physical address from translated result
+This **doubles** the memory accesses, slowing system by factor of 2 or more. TLB (next chapter) solves this.
+
+**Q6: 64-byte virtual address space, 16-byte pages. Virtual address is 21. Show the translation to physical address if VPN 1 maps to PFN 7.**
+
+**Answer:**
+- 64-byte space / 16-byte pages = 4 pages → VPN = 2 bits
+- Offset within 16-byte page → 4 bits
+- Virtual address 21 = binary 010101
+  - VPN = top 2 bits = **01** (VPN 1)
+  - Offset = bottom 4 bits = **0101** (5 decimal)
+- Page table: VPN 1 → PFN 7 (binary 111)
+- Physical address = 1110101 binary = **117 decimal**
+
+**Q7: Why are page tables stored in memory instead of in special hardware registers in the MMU?**
+
+**Answer:** Page tables are **too large** to fit in hardware. Example: 32-bit address space with 4KB pages requires 2²⁰ entries (~1 million). With 4 bytes per PTE, that's 4MB per process. With 100 processes, that would be 400MB of on-chip storage—completely impractical. Instead, page tables reside in memory, and hardware uses a **page-table base register (PTBR)** to locate them.
+
+---
+
+## Chapter 19: Paging - Faster Translations (TLBs)
+
+### The Crux: How to Speed Up Address Translation
+
+**How can we speed up address translation, and generally avoid the extra memory reference that paging seems to require? What hardware support is required? What OS involvement is needed?**
+
+### What is a TLB?
+
+**TLB** = **Translation-Lookaside Buffer** (historical name from 1964, John Couleur)
+- Better name: **Address-translation cache**
+- **Hardware cache** of popular virtual-to-physical address translations
+- Part of chip's **Memory Management Unit (MMU)**
+- Small, fast, on-chip memory
+- **Makes virtual memory possible** - without TLB, paging would be too slow
+
+### TLB Basic Operation
+
+**On each virtual memory reference**:
+1. Hardware checks TLB for translation
+2. **TLB Hit**: Translation found → use it (fast, no memory access needed)
+3. **TLB Miss**: Translation not found → access page table in memory, update TLB, retry instruction
+
+**Control flow**:
 ```
-Access 0 (VPN=0): Miss → load VPN 0 into TLB
-Access 4096 (VPN=1): Miss → load VPN 1 into TLB
-Access 8192 (VPN=2): Miss → load VPN 2 into TLB
-Access 4096 (VPN=1): Hit (VPN 1 in TLB)
-Access 0 (VPN=0): Hit (VPN 0 in TLB)
+VPN = extract from virtual address
+if (VPN in TLB):  // TLB Hit
+    PFN = TLB[VPN].PFN
+    check protection bits
+    PhysAddr = (PFN << SHIFT) | offset
+    access memory
+else:  // TLB Miss
+    PTE = PageTable[VPN]  // Extra memory access!
+    check valid bit, protection bits
+    TLB_Insert(VPN, PTE.PFN, PTE.ProtectBits)
+    retry instruction  // Now will be TLB hit
 ```
-**3 misses, 2 hits**
 
-**Q6: What's the difference between hardware-managed and software-managed TLBs?**
+### Spatial and Temporal Locality
+
+**Spatial locality**: Elements close in space accessed together
+- Array access: `a[0]`, `a[1]`, `a[2]` all on same page
+- First access to page = TLB miss, subsequent accesses = TLB hit
+- Example: 10-element array spread across 3 pages
+  - Access pattern: **miss, hit, hit, miss, hit, hit, hit, miss, hit, hit**
+  - Hit rate: **70%** even on first pass!
+
+**Temporal locality**: Recently accessed items accessed again soon
+- Second pass through same array: **all hits** (if TLB large enough)
+- Loop variables, repeatedly executed code
+
+### Who Handles TLB Miss?
+
+**Hardware-managed TLB** (CISC, Intel x86):
+- Hardware knows page table location (CR3 register)
+- Hardware knows page table format (multi-level)
+- On miss: Hardware automatically walks page table, updates TLB
+- **Advantage**: Fast
+- **Disadvantage**: Inflexible (page table format fixed by hardware)
+
+**Software-managed TLB** (RISC, MIPS, SPARC):
+- On miss: Hardware raises **TLB_MISS exception**
+- Traps to OS handler in kernel mode
+- OS walks page table (any format OS wants!)
+- OS uses **privileged instructions** to update TLB
+- Return-from-trap **retries** instruction → TLB hit
+- **Advantage**: Flexibility (OS can use any page table structure)
+- **Disadvantage**: Trap overhead
+
+**Important details**:
+1. **Return-from-trap must retry** the instruction that caused the trap (not next instruction)
+2. **Avoid infinite TLB miss loops**:
+   - Keep TLB miss handler in **physical memory** (unmapped)
+   - Use **wired translations** (permanently in TLB for handler code)
+
+### TLB Contents
+
+**Typical TLB**: 32, 64, or 128 entries
+
+**Each entry**:
+```
+| VPN | PFN | Valid | Protection | Dirty | ASID | G | other |
+```
+
+- **VPN**: Virtual Page Number (tag for lookup)
+- **PFN**: Physical Frame Number (translation)
+- **Valid bit**: Is this entry valid?
+- **Protection bits**: Read/Write/Execute permissions
+- **Dirty bit**: Has page been modified?
+- **ASID**: Address Space Identifier (process ID, ~8 bits)
+- **G (Global)**: Globally shared across processes
+
+**Fully associative**:
+- Translation can be in **any TLB entry**
+- Hardware searches **all entries in parallel**
+- Expensive but necessary for small TLBs
+
+### Context Switch Problem
+
+**Problem**: TLB contains translations only valid for current process
+- Process P1: VPN 10 → PFN 100
+- Process P2: VPN 10 → PFN 170
+- If both in TLB, which is which?
+
+**Solution 1: Flush TLB on context switch**
+- Set all valid bits to 0
+- **Advantage**: Simple, works
+- **Disadvantage**: Next process incurs TLB misses for all pages → expensive if frequent context switches
+
+**Solution 2: Address Space Identifier (ASID)**
+- Add ASID field to each TLB entry
+- Hardware checks: `(VPN == entry.VPN) AND (ASID == entry.ASID)`
+- OS sets ASID register on context switch
+- **Advantage**: Processes can share TLB without confusion
+- **Disadvantage**: What if > 2^8 processes? (must flush some entries)
+
+**TLB with ASID**:
+```
+VPN | PFN | Valid | Prot | ASID
+ 10 | 100 |   1   | rwx  |  1    ← Process 1
+ 10 | 170 |   1   | rwx  |  2    ← Process 2 (no conflict!)
+```
+
+### TLB Replacement Policy
+
+**When TLB full and new entry needed, which to evict?**
+
+**LRU (Least Recently Used)**:
+- Evict entry not used for longest time
+- Exploits temporal locality
+- **Problem**: Pathological case with loop over n+1 pages in TLB of size n → 100% misses
+
+**Random**:
+- Evict random entry
+- Simple, avoids corner cases
+- Generally performs reasonably well
+
+### TLB Coverage and Performance
+
+**TLB coverage** = # entries × page size
+- Example: 64 entries × 4KB = 256KB coverage
+
+**Exceeding TLB coverage**:
+- Working set > TLB coverage → many TLB misses → severe performance penalty
+- **Solution**: Use **larger pages** for key data structures
+  - Maps more memory with same # of TLB entries
+  - Common in databases (large, randomly accessed data)
+
+**Culler's Law**: "RAM isn't always RAM"
+- Random memory access can be much slower if exceeds TLB coverage
+- Access cost varies depending on TLB hits/misses
+
+### Practice Questions with Answers
+
+**Q1: Why is a TLB necessary? What problem would exist without it?**
+
+**Answer:** Without a TLB, **every** memory access would require **two** memory accesses:
+1. Access page table in memory to get translation
+2. Access actual data at translated address
+This would make programs run **2x slower or worse**. The TLB caches translations so most accesses only need one memory reference (on TLB hit), making paging practical.
+
+**Q2: A TLB has 64 entries. A program accesses a 10-element integer array (4 bytes each) with 16-byte pages. The array starts at virtual address 100. Trace the TLB hits/misses for accessing all elements sequentially.**
 
 **Answer:**
-- **Hardware-managed (CISC/x86)**: On TLB miss, hardware automatically walks page table in memory, loads PTE into TLB
-- **Software-managed (RISC)**: On TLB miss, hardware raises exception to OS, OS handler walks page table, loads TLB, returns
-- Hardware is faster, software is more flexible
+Array: `a[0]` at 100, `a[1]` at 104, ..., `a[9]` at 136
+- Page size = 16 bytes → 4 integers per page
+- `a[0], a[1], a[2], a[3]` on VPN 6 (bytes 96-111)
+- `a[4], a[5], a[6], a[7]` on VPN 7 (bytes 112-127)
+- `a[8], a[9]` on VPN 8 (bytes 128-143)
 
-**Q7: 16-bit addresses, 256-byte pages. How much memory must be allocated for a linear page table?**
+Access pattern:
+- `a[0]`: **Miss** (load VPN 6)
+- `a[1], a[2], a[3]`: **Hit, Hit, Hit** (VPN 6 in TLB)
+- `a[4]`: **Miss** (load VPN 7)
+- `a[5], a[6], a[7]`: **Hit, Hit, Hit**
+- `a[8]`: **Miss** (load VPN 8)
+- `a[9]`: **Hit**
+
+**Result**: 3 misses, 7 hits → **70% hit rate** (spatial locality!)
+
+**Q3: What is the difference between hardware-managed and software-managed TLBs? Give an example architecture of each.**
 
 **Answer:**
-- Address space = 2^16 = 64KB
-- Page size = 256 bytes = 2^8
-- # pages = 64KB / 256B = 256 pages
-- Each PTE typically ~4 bytes
-- **Page table size = 256 × 4 = 1024 bytes = 1KB**
-(This is the minimum required memory for the page table)
+**Hardware-managed** (Intel x86, CISC):
+- Hardware walks page table on TLB miss
+- Hardware must know page table format and location
+- Faster (no trap overhead)
+- Less flexible (page table structure fixed)
+
+**Software-managed** (MIPS, SPARC, RISC):
+- TLB miss raises exception to OS
+- OS trap handler walks page table, updates TLB
+- Slower (trap overhead)
+- More flexible (OS can use any page table structure)
+
+**Q4: Explain how Address Space Identifiers (ASIDs) solve the context switch problem. Why is flushing the TLB on every context switch expensive?**
+
+**Answer:**
+**Without ASID**: Two processes with same VPN would conflict in TLB. Must flush entire TLB on context switch (set all valid bits to 0).
+- **Expensive**: Next process incurs TLB miss on every page access until TLB repopulated
+- Frequent context switches → many TLB misses → poor performance
+
+**With ASID**: Each TLB entry tagged with process ID (ASID field)
+- Hardware checks: match VPN **and** ASID
+- Processes can share TLB without confusion
+- No flush needed → much faster context switches
+
+**Q5: A system has 64-entry TLB with 4KB pages. Calculate TLB coverage. If a program's working set is 512KB, what will likely happen to performance?**
+
+**Answer:**
+- **TLB coverage** = 64 entries × 4KB = **256KB**
+- Working set (512KB) **exceeds** TLB coverage
+- Program will experience **many TLB misses** (exceeding TLB coverage)
+- **Severe performance penalty** - constant thrashing of TLB
+- **Solution**: Use larger pages (e.g., 2MB pages → 128MB coverage)
+
+**Q6: On a TLB hit, how many memory accesses are required? On a TLB miss?**
+
+**Answer:**
+- **TLB hit**: **1 memory access** (just the data itself; translation in TLB on-chip)
+- **TLB miss** (hardware-managed): **2 memory accesses**:
+  1. Access page table in memory to get PFN
+  2. Access actual data at translated address
+- **TLB miss** (software-managed): **2+ memory accesses**:
+  1. Access page table (may involve multiple levels)
+  2. Access actual data
+  Plus trap overhead
+
+**Q7: Explain the difference between temporal locality and spatial locality. How does each improve TLB performance?**
+
+**Answer:**
+**Spatial locality**: Memory locations **close together** accessed near in time
+- Example: Array elements `a[0], a[1], a[2]`
+- **TLB benefit**: Elements on same page share one translation → one TLB miss covers multiple accesses
+
+**Temporal locality**: Same memory location accessed **repeatedly over time**
+- Example: Loop variable, loop instructions
+- **TLB benefit**: Once translation in TLB, subsequent accesses to same page are hits
+
+Both reduce TLB misses, making paging efficient in practice.
+
+---
+
+## Chapter 20: Paging - Smaller Tables
+
+### The Crux: How To Make Page Tables Smaller?
+
+**Simple array-based page tables (linear page tables) are too big, taking up far too much memory on typical systems. How can we make page tables smaller? What are the key ideas? What inefficiencies arise as a result of these new data structures?**
+
+### The Problem: Page Tables Are Too Big
+
+With 32-bit address space and 4KB pages:
+- Virtual address space = 2^32 bytes = **4GB**
+- Page size = 4KB = 2^12 bytes
+- Number of pages = 4GB / 4KB = **2^20 = 1 million pages**
+- Each PTE = 4 bytes
+- **Page table size = 4MB per process**
+
+With 100 processes: **400MB** just for page tables! Most of that space is wasted (invalid pages).
+
+### Solution 1: Bigger Pages
+
+**Idea**: Use larger pages (e.g., 16KB instead of 4KB)
+- Fewer pages → smaller page table
+- Example: 16KB pages → 2^18 = 256K pages → 1MB page table
+
+**Problem**: **Internal fragmentation**
+- Large pages waste space inside each page
+- Application uses small portion of page → rest wasted
+- **Not commonly used** (except for specific use cases like large databases)
+
+### Solution 2: Hybrid Approach (Paging + Segmentation)
+
+**Idea**: Combine paging and segmentation (from Multics system)
+- One page table **per segment** (code, heap, stack)
+- Base register points to page table for that segment
+- Bounds register indicates end of page table
+
+**Advantages**:
+- Unallocated pages between stack and heap don't need page table entries
+- Saves memory compared to linear page table
+
+**Disadvantages**:
+- Still have **segmentation problems** (external fragmentation)
+- Not flexible if sparse address space (large but sparsely used heap)
+- **Not widely used** in modern systems
+
+### Solution 3: Multi-Level Page Tables (Most Important!)
+
+**The key idea**: Turn linear page table into **tree structure**
+- Chop up page table into **page-sized units**
+- If entire page of PTEs invalid → don't allocate that page
+- Use **page directory** to track which pages of page table are allocated
+
+**Two-level page table structure**:
+
+```
+Page Directory (points to pages of page table)
+    ↓
+Page Table Pages (contains actual PTEs)
+    ↓
+Physical Memory Pages
+```
+
+**Advantages**:
+1. **Only allocate page table space proportional to amount of address space in use**
+   - Sparse address spaces use much less memory
+   - Growing address space easier (just allocate new page table pages)
+2. **Each page table page fits in a page** → can be swapped if memory tight
+3. **Widely used** in modern systems (x86, ARM, etc.)
+
+**Disadvantages**:
+1. **Time-space trade-off**: Saves space but costs time
+   - On TLB miss: must load **two** PTEs from memory (directory entry + actual PTE)
+   - More complex to manage
+2. **More memory lookups** on TLB miss:
+   - Without TLB: 1 load for PTE + 1 for data = **2 loads**
+   - With 2-level: 1 for directory + 1 for PTE + 1 for data = **3 loads**
+   - TLB critically important!
+
+### Multi-Level Page Table Example (x86)
+
+**32-bit address breakdown** (two-level):
+```
+| VPN (20 bits)     | Offset (12 bits) |
+| PDI (10) | PTI (10) | Offset (12)     |
+```
+
+- **PDI** (Page Directory Index): Index into page directory (2^10 = 1024 entries)
+- **PTI** (Page Table Index): Index into page table (2^10 = 1024 entries)
+- **Offset**: Byte within page (4KB = 2^12)
+
+**Address translation with two-level table**:
+```
+1. Extract PDI from virtual address
+2. PDEAddr = PDBR + (PDI × sizeof(PDE))  // Page Directory Base Register
+3. PDE = Memory[PDEAddr]
+4. if (PDE.Valid == False): raise exception
+5. PTEAddr = (PDE.PFN << SHIFT) + (PTI × sizeof(PTE))
+6. PTE = Memory[PTEAddr]
+7. if (PTE.Valid == False): raise exception
+8. PhysAddr = (PTE.PFN << SHIFT) + Offset
+```
+
+**Three-level and beyond**:
+- 64-bit address spaces require **more levels** (x86-64 uses 4 levels)
+- More levels = even more memory lookups on TLB miss
+- **TLB becomes even more critical** for performance
+
+### Solution 4: Inverted Page Tables
+
+**Idea**: Instead of one entry per virtual page, have **one entry per physical page**
+- Page table size determined by **physical memory**, not virtual
+- Example: 1GB physical memory, 4KB pages → 256K entries (only 1MB for page table!)
+
+**Structure**:
+```
+Physical Frame | VPN | ASID
+      0        | ... | ...
+      1        | ... | ...
+     ...
+```
+
+**Translation**:
+- Search page table for matching (VPN, ASID)
+- Index in table = physical frame number
+- **Problem**: Linear scan is slow → use **hash table** to speed up lookup
+
+**Advantages**: Very **compact** (size based on physical memory)
+
+**Disadvantages**: Reverse lookup is **slower** (even with hash table)
+
+### Swapping Page Tables to Disk
+
+Since page table pages fit in pages, kernel can **swap** them to disk if memory tight
+- Page directory entries have **present bit**
+- If present bit = 0, page table page on disk
+- **Page fault** when accessing → OS loads page table page from disk
+
+Allows system to support very large address spaces even when memory constrained.
+
+### Practice Questions with Answers
+
+**Q1: Why are simple linear page tables impractical for modern systems? Calculate the page table size for a 32-bit address space with 4KB pages and 4-byte PTEs.**
+
+**Answer:**
+- Address space = 2^32 = 4GB
+- Page size = 4KB = 2^12
+- Number of pages = 4GB / 4KB = 2^20 = 1,048,576 pages
+- PTE size = 4 bytes
+- **Page table size = 1,048,576 × 4 = 4,194,304 bytes = 4MB per process**
+
+With 100 processes: **400MB** just for page tables! Most entries are invalid (wasted space). Linear page tables don't scale.
+
+**Q2: Explain the time-space trade-off in multi-level page tables. Why does this make TLBs even more important?**
+
+**Answer:**
+**Space saving**: Multi-level tables only allocate page table space for used portions of address space (sparse allocation). Sparse address spaces use much less memory than linear tables.
+
+**Time cost**: On TLB miss, need **multiple memory accesses**:
+- Linear table: 1 PTE load + 1 data = **2 memory accesses**
+- Two-level: 1 page directory + 1 PTE + 1 data = **3 memory accesses**
+- Four-level (x86-64): **5 memory accesses** total!
+
+**Why TLB critical**: On **TLB hit**, only **1 memory access** (for data). The TLB eliminates extra page table lookups, making the time cost negligible in practice. Without TLB, multi-level tables would be unacceptably slow.
+
+**Q3: For a two-level page table on x86 (4KB pages), how is a 32-bit virtual address broken down? Show the calculation for translating VPN to page directory and page table indices.**
+
+**Answer:**
+**Address breakdown**:
+```
+| Page Directory Index | Page Table Index | Offset |
+|      10 bits        |     10 bits      | 12 bits|
+```
+
+- **Offset**: 12 bits → 2^12 = 4KB page
+- **PTI** (Page Table Index): 10 bits → 2^10 = 1024 PTEs per page table page
+- **PDI** (Page Directory Index): 10 bits → 2^10 = 1024 page directory entries
+
+**Example**: Virtual address = `0x00403004`
+- Binary: `00 0000 0100 | 00 0000 0011 | 0000 0000 0100`
+- PDI = `0000000100` = **4**
+- PTI = `0000000011` = **3**
+- Offset = `000000000100` = **4**
+
+**Translation**:
+1. Page directory entry 4 → gives PFN of page table page
+2. Page table entry 3 in that page → gives PFN of actual data page
+3. Offset 4 within that page → final physical address
+
+**Q4: How does a multi-level page table save memory compared to a linear page table? Give a concrete example.**
+
+**Answer:**
+**Linear page table**: Must allocate **all** PTEs, even for invalid pages
+- 32-bit address, 4KB pages → **4MB page table** (all 1M entries)
+
+**Multi-level page table**: Only allocate page table pages for **valid** regions
+
+**Example**: Process uses:
+- Code: 1MB (at bottom of address space)
+- Heap: 2MB (growing upward)
+- Stack: 1MB (at top of address space)
+- **Total**: 4MB of 4GB address space used
+
+**Linear**: 4MB for page table
+
+**Two-level**:
+- Page directory: 1 page = **4KB**
+- Code region: 1MB / 4KB = 256 pages → needs 256 PTEs → **1 page table page (4KB)**
+- Heap: 2MB → 512 PTEs → **2 page table pages (8KB)**
+- Stack: 1MB → 256 PTEs → **1 page table page (4KB)**
+- **Total**: 4KB + 4KB + 8KB + 4KB = **20KB** (200x smaller!)
+
+**Q5: What is an inverted page table? What are its advantages and disadvantages?**
+
+**Answer:**
+**Inverted page table**: **One entry per physical frame** (not per virtual page)
+- Size determined by **physical memory**, not virtual address space
+- Entry contains: (VPN, ASID) for process using that frame
+
+**Example**: 1GB physical memory, 4KB pages
+- Frames = 1GB / 4KB = 256K frames
+- Page table = 256K entries × 8 bytes = **2MB** (vs 400MB for 100 linear page tables)
+
+**Advantages**:
+- **Very compact** - grows with physical memory, not virtual
+- Fixed size regardless of number of processes
+
+**Disadvantages**:
+- **Slow translation** - must search table for matching (VPN, ASID)
+- Requires hash table to speed up lookups
+- Still slower than multi-level forward page tables with TLB
+
+**Used in**: IBM PowerPC, older systems
+
+**Q6: Why is using bigger pages (e.g., 16KB instead of 4KB) not a widely adopted solution for reducing page table size?**
+
+**Answer:**
+**How it helps**: Bigger pages → fewer pages → smaller page table
+- 4KB pages: 1M pages → 4MB table
+- 16KB pages: 256K pages → 1MB table
+
+**Why not used**:
+- **Internal fragmentation**: Application allocates 16KB page but only uses 4KB → **12KB wasted**
+- Small applications waste significant memory
+- **Trade-off gets worse**: 2MB pages (x86 "huge pages") → massive waste for small allocations
+
+**Where it IS used**:
+- Large databases, scientific computing (huge datasets)
+- Increase TLB coverage for large working sets
+- **Optional/selective**, not default for all processes
+
+**Multi-level page tables** are preferred: save space without internal fragmentation.
+
+**Q7: Describe the address translation process for a two-level page table. What happens on a TLB miss with this structure?**
+
+**Answer:**
+**On TLB hit** (common case):
+1. TLB contains (VPN → PFN) mapping
+2. PhysAddr = (PFN << 12) | Offset
+3. Access memory once → **1 memory access total**
+
+**On TLB miss** (two-level table):
+1. **Extract PDI** (page directory index) from VPN
+2. **Load page directory entry**: `PDE = Memory[PDBR + PDI × 4]` → **Memory access #1**
+3. Check PDE.Valid (if 0 → page fault)
+4. **Extract PTI** (page table index) from VPN
+5. **Load page table entry**: `PTE = Memory[(PDE.PFN << 12) + PTI × 4]` → **Memory access #2**
+6. Check PTE.Valid (if 0 → page fault)
+7. **Access data**: `Data = Memory[(PTE.PFN << 12) + Offset]` → **Memory access #3**
+8. **Update TLB** with (VPN → PFN) mapping
+9. **Total on TLB miss: 3 memory accesses** (vs 1 on TLB hit)
+
+This is why **TLB hit rate is critical** for performance!
 
 ---
 
 ## Chapters 26/27: Introduction to Concurrency
 
-### Why Concurrency?
-- **Parallelism**: Use multiple CPUs simultaneously
-- **Avoid blocking**: One thread waits for I/O, another runs
-- **Better structure**: Separate concerns (e.g., UI thread + worker thread)
+### The Crux: How To Support Synchronization
 
-### Thread vs Process
-- **Process**: Own address space, heavy context switch
-- **Thread**: Share address space, light context switch
-- Threads share: code, heap, globals
-- Threads private: stack, registers
+**What support do we need from the hardware in order to build useful synchronization primitives? What support do we need from the OS? How can we build these primitives correctly and efficiently? How can programs use them to get the desired results?**
 
-### The Problem: Race Conditions
-- **Race condition**: Outcome depends on execution timing
-- Occurs when multiple threads access shared data without synchronization
-- **Critical section**: Code that accesses shared resource
+### Thread Abstraction
 
-### Visual: Thread Memory Layout
+**Classic process**: Single point of execution (one PC fetching and executing instructions)
+
+**Multi-threaded process**: More than one point of execution (**multiple PCs**, each being fetched and executed from)
+
+**Key insight**: Each thread is like a separate process, **except** they share the same address space and thus can access the same data.
+
+### Thread State
+
+**Each thread has**:
+- **Program Counter (PC)**: Tracks where thread is fetching instructions
+- **Private set of registers** for computation
+- **Own stack** (thread-local storage for local variables, parameters, return values)
+
+**Thread Control Block (TCB)**: Stores state of each thread (similar to PCB for processes)
+
+### Context Switch Between Threads
+
+**Similar to process context switch**:
+- Save register state of T1 to its TCB
+- Restore register state of T2 from its TCB
+
+**Major difference**: **Address space remains the same**
+- No need to switch page tables (unlike process context switch)
+- This is why thread switching is **much faster** than process switching
+
+### Multi-Threaded Address Space
+
+**Single-threaded process**: One stack at bottom of address space
+
+**Multi-threaded process**: **One stack per thread** spread throughout address space
+
 ```
-Process Address Space:
-┌──────────────┐
-│    Code      │ ← Shared by all threads
-├──────────────┤
-│    Heap      │ ← Shared
-├──────────────┤
-│  Thread 1    │ ← Private stack
-│   Stack      │
-├──────────────┤
-│  Thread 2    │ ← Private stack
-│   Stack      │
-└──────────────┘
+Single-Threaded:              Multi-Threaded (2 threads):
+0KB  ┌─────────────┐         0KB  ┌─────────────┐
+     │ Program Code│              │ Program Code│
+1KB  ├─────────────┤         1KB  ├─────────────┤
+     │    Heap     │              │    Heap     │
+2KB  │      ↓      │         2KB  ├─────────────┤
+     │             │              │   (free)    │
+     │             │              │             │
+     │      ↑      │              ├─────────────┤
+15KB │   Stack     │              │  Stack (2)  │  ← Thread 2 stack
+16KB └─────────────┘              ├─────────────┤
+                                  │   (free)    │
+                             15KB ├─────────────┤
+                                  │  Stack (1)  │  ← Thread 1 stack
+                             16KB └─────────────┘
 ```
+
+**Thread-local storage**: Stack-allocated variables, parameters, return values placed in the stack of the relevant thread
+
+### Why Use Threads?
+
+**Reason 1: Parallelism**
+- Use multiple CPUs to speed up programs
+- Example: Adding two large arrays
+  - Single CPU: Process sequentially
+  - Multiple CPUs: Each CPU processes a portion → **much faster**
+- **Parallelization**: Transforming single-threaded program to use multiple CPUs
+- Thread per CPU is natural way to make programs faster on modern hardware
+
+**Reason 2: Avoid Blocking Due to Slow I/O**
+- Instead of waiting for I/O (disk, network, page fault), do something else
+- While one thread waits (blocked for I/O), CPU scheduler switches to other ready threads
+- **Overlap I/O with computation** within single program
+- Like multiprogramming for processes, but within one program
+- Why modern servers (web servers, databases) use threads extensively
+
+**Why not use processes?**
+- Could use multiple processes instead
+- But threads **share address space** → easy to share data
+- Threads are natural choice when sharing data structures needed
+- Processes better for logically separate tasks with little sharing
+
+### The Problem: Shared Data and Race Conditions
+
+**Example**: Two threads each increment shared counter 10 million times
+```c
+static volatile int counter = 0;
+
+void *mythread(void *arg) {
+    for (int i = 0; i < 10000000; i++) {
+        counter = counter + 1;  // Critical section
+    }
+}
+```
+
+**Expected result**: 20,000,000
+
+**Actual result**: Sometimes 19,345,221, sometimes 19,221,041, sometimes correct!
+
+**Why?** The single C statement `counter = counter + 1` compiles to **three assembly instructions**:
+
+```assembly
+mov 0x8049a1c, %eax   # Load counter into register
+add $0x1, %eax        # Increment register
+mov %eax, 0x8049a1c   # Store register back to counter
+```
+
+**The race condition**:
+1. Thread 1 loads counter (50) into eax
+2. Thread 1 increments eax to 51
+3. **INTERRUPT** - Thread 1 paused, Thread 2 runs
+4. Thread 2 loads counter (still 50!) into eax
+5. Thread 2 increments eax to 51
+6. Thread 2 stores 51 to counter
+7. **INTERRUPT** - Thread 1 resumes
+8. Thread 1 stores eax (51) to counter
+9. **Result**: counter = 51 (should be 52!)
+
+### Key Concurrency Terms (Dijkstra)
+
+**Critical Section**:
+- Piece of code that accesses shared resource (variable, data structure, etc.)
+- **Must not** be concurrently executed by more than one thread
+- Example: The three instructions updating counter
+
+**Race Condition (Data Race)**:
+- Results depend on **timing** of code execution
+- Multiple threads enter critical section at roughly same time
+- Both attempt to update shared data → surprising outcome
+
+**Indeterminate Program**:
+- Contains one or more race conditions
+- Output **varies** from run to run depending on which threads ran when
+- Not **deterministic** (what we expect from computers!)
+
+**Mutual Exclusion**:
+- Property that guarantees only **one thread** executing in critical section
+- If one thread in critical section, others **prevented** from entering
+- What we need to solve the race condition problem
+
+**All these terms coined by Edsger Dijkstra** (Turing Award winner, 1968 paper "Cooperating Sequential Processes")
+
+### The Wish For Atomicity
+
+**Atomicity**: Execute as a unit, "**all or nothing**"
+- Either all actions in group occur, or none occur
+- No in-between state visible
+- Also called a **transaction** (from database systems)
+
+**What we want**: Execute the three-instruction sequence atomically:
+```assembly
+mov 0x8049a1c, %eax
+add $0x1, %eax
+mov %eax, 0x8049a1c
+```
+
+**Hardware solution**: Could have powerful atomic instruction like:
+```assembly
+memory-add 0x8049a1c, $0x1  # Atomic increment of memory location
+```
+
+Hardware guarantees: When interrupt occurs, instruction has either not run at all, or has run to completion. No in-between state.
+
+**Problem**: Can't have atomic instruction for everything (imagine "atomic update of B-tree"!)
+
+**Real solution**:
+- Hardware provides a few useful **atomic instructions**
+- OS provides help
+- Build general **synchronization primitives** on top
+- Use these primitives to build correct multi-threaded code
+
+### One More Problem: Waiting For Another
+
+Besides atomicity, threads often need to **wait** for each other:
+- One thread must wait for another to complete some action before continuing
+- Example: Process performs disk I/O and is put to sleep; when I/O completes, process needs to be woken up
+
+Coming chapters cover:
+1. **Synchronization primitives** for atomicity (locks)
+2. **Mechanisms for sleeping/waking** interaction (condition variables)
+
+### Why in OS Class?
+
+**History**: OS was the **first concurrent program**
+- Interrupts can occur at any time
+- OS must update kernel data structures (page tables, process lists, file system structures, bitmaps, inodes)
+- These are **critical sections** that must be protected
+- Techniques created for OS, later used by application programmers
+
+**Example**: Two processes call write() to append to same file
+- Both must: allocate new block, update inode, change file size
+- Interrupt can occur anytime → critical sections must be synchronized
+- Virtually every kernel data structure must be carefully accessed with proper synchronization
 
 ### Practice Questions with Answers
 
