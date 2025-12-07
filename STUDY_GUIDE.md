@@ -836,27 +836,100 @@ Example:
 
 ## Chapter 17: Free Space Management
 
+### The Crux: How to Manage Free Space
+
+**How should free space on the heap be managed, when satisfying variable-sized requests? What strategies can be used to minimize fragmentation? What are the time and space overheads of alternate approaches?**
+
 ### Problem: External Fragmentation
-- Free space chopped into little pieces
+- Free space chopped into little pieces of **varying sizes**
 - Can't satisfy large allocation even if total free space is sufficient
+- Applies to **variable-sized units** (like malloc/free with segments)
+- Fixed-size units (like paging) **do not** suffer from external fragmentation
 
-### Free List Strategies
+### Low-Level Mechanisms
 
-**Best Fit**: Find smallest block that fits (minimizes wasted space)
-**Worst Fit**: Find largest block (leaves bigger leftover chunk)
-**First Fit**: Find first block that fits (fast)
-**Next Fit**: Like first fit, but start from last allocation
+**Splitting**: When requested size < free block size
+- Allocate requested amount
+- Return remaining space to free list
 
-### Splitting and Coalescing
+**Coalescing**: When freeing memory
+- Look at addresses of adjacent blocks
+- Merge newly freed space with adjacent free chunks
+- Returns larger free block to list
 
-**Splitting**: If block is too large, split it
+**Tracking allocated region size**: Use **header**
+- Located **immediately before** the handed-out memory chunk
+- Contains at minimum: **size** of allocated region
+- When `free(ptr)` called, library examines header at `ptr - sizeof(header)` to find size
+- **Magic number** often included for integrity checking
+
+**Embedding free list in free space itself**:
+- Free list pointers stored **inside** the free chunks themselves
+- When chunk is free, use it to store `next` pointer
+- When allocated, data overwrites the pointers (they're not needed)
+- **Zero overhead** when chunk is allocated
+
+### Basic Allocation Strategies
+
+**Best Fit**: Search list, find smallest block that fits
+- Minimizes wasted space
+- **Exhaustive search** → slow
+
+**Worst Fit**: Find largest block, return requested amount
+- Leaves bigger leftover chunks (may be more useful)
+- **Exhaustive search** → slow
+- Still high fragmentation
+
+**First Fit**: Find first block that fits
+- **Fast** (stops at first match)
+- Pollutes beginning of free list with small objects
+
+**Next Fit**: Like first fit, but start from **last allocation point**
+- Spreads searches more uniformly
+- Similar performance to first fit
+
+### Advanced Approaches
+
+**Segregated Lists**:
+- Keep **separate lists** for popular-sized objects
+- Example: one list for 8-byte allocations, another for 16-byte, etc.
+- Request for N bytes → check N-byte-specific list first
+- If empty, fall back to general allocator
+- **Benefits**: Fast allocation for common sizes, reduces fragmentation
+- **Slab allocator** is a modern segregated list approach
+
+**Slab Allocator** (Jeff Bonwick, Solaris kernel):
+- Allocates **object caches** for kernel objects (locks, file-system inodes, etc.)
+- When kernel boots: creates object caches (pools) for each kernel object type
+- Requests go to specific object cache
+- When cache runs low, requests **slabs** of memory from general allocator
+- **Benefits**:
+  - No fragmentation (objects same size within cache)
+  - Fast allocation/free (free objects immediately reusable)
+  - Pre-initialized objects (constructor called once)
+
+**Buddy Allocation** (Binary Buddy Allocator):
+- Memory divided using **binary tree** structure
+- Free memory starts as one big block (e.g., 64KB)
+- When request comes in, recursively divide block in **half** until block just big enough
+- Example: 7KB request from 64KB
+  - Divide 64→32→16→8 (8KB buddy blocks)
+  - Allocate one 8KB, mark buddy as free
+- **Coalescing**: When freeing, check if **buddy** is free → merge back
+  - Buddy address: flip bit in address at recursion level
+- **Benefits**: Fast coalescing (buddy address easily calculated)
+- **Drawbacks**: Internal fragmentation (7KB request wastes ~1KB)
+
+### Visual Examples
+
+**Splitting** example:
 ```
 Request 10 bytes from 30-byte block:
 Before: [30 bytes free]
 After:  [10 allocated][20 free]
 ```
 
-**Coalescing**: Merge adjacent free blocks
+**Coalescing** example:
 ```
 Free block A, then B (adjacent):
 Before: [A: used][B: used][C: free]
@@ -905,31 +978,46 @@ Can't merge 100 with 60 because 50-byte used block separates them.
 
 **Answer:** External fragmentation creates many small, non-contiguous free blocks. Even if their total size is 100KB, you can't satisfy a 50KB request if the largest contiguous block is only 10KB. Memory is fragmented into unusable pieces.
 
-**Q5: Free list: [30B][10B][25B][40B]. Request 15B using Best Fit. Then request 8B using First Fit. Show final state.**
-
-**Answer:**
-Step 1 (15B, Best Fit):
-- Best fit is 25B (smallest ≥15B)
-- After: [30B free][10B free][15B used][10B free][40B free]
-
-Step 2 (8B, First Fit):
-- First fit is first 30B block
-- After: [8B used][22B free][10B free][15B used][10B free][40B free]
-
-**Q6: What is the purpose of the header in each allocated block?**
+**Q5: What is the purpose of the header in each allocated block, and how does it enable free()?**
 
 **Answer:** The header stores metadata:
 - **Size** of the block (needed for free() to know how much to free)
 - **Allocation status** (allocated or free)
-- Optional: pointers to next/prev free blocks (for free list)
-When user calls free(ptr), the allocator reads the header just before ptr to find the size.
+- **Magic number** for integrity checking
+- Located **immediately before** the returned pointer
+When user calls `free(ptr)`, the library examines the header at `ptr - sizeof(header)` to determine how much memory to return to the free list.
 
-**Q7: Calculate: If header=8 bytes and user requests 24 bytes, how much total space is allocated?**
+**Q6: Explain how segregated lists improve allocation performance. What is the slab allocator?**
 
 **Answer:**
-- Header: 8 bytes
-- User data: 24 bytes
-- **Total: 32 bytes** allocated from heap
+**Segregated lists**:
+- Maintain **separate free lists** for popular object sizes (e.g., 8B list, 16B list, 64B list)
+- Allocation for N bytes → check N-byte list first (fast, O(1) if available)
+- If empty, request from general allocator
+- **Benefits**: Reduces fragmentation, fast allocation for common sizes
+
+**Slab allocator** (Bonwick, Solaris):
+- Specialized segregated list for **kernel objects** (inodes, locks, process descriptors)
+- Pre-allocates **object caches** (slabs) for each type
+- Objects pre-initialized with constructor
+- **Benefits**: Zero fragmentation within cache, very fast alloc/free, no initialization overhead
+
+**Q7: A buddy allocator has 64KB free. Request 7KB. Show the splitting process and calculate internal fragmentation.**
+
+**Answer:**
+Buddy allocation uses **binary splitting**:
+1. Start: 64KB free
+2. Need ≥7KB → split: 64KB → 32KB + 32KB
+3. Need ≥7KB → split left: 32KB → 16KB + 16KB
+4. Need ≥7KB → split left: 16KB → 8KB + 8KB
+5. Allocate one 8KB block (just fits 7KB request)
+
+**Result**:
+- Allocated: 8KB
+- Used: 7KB
+- **Internal fragmentation**: 8KB - 7KB = **1KB wasted**
+
+Free structure: [8KB allocated][8KB free buddy][16KB free][32KB free]
 
 ---
 
