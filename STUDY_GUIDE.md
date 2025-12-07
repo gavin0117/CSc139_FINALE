@@ -61,59 +61,56 @@
 
 ### Key System Calls
 - **fork()**: Creates a new child process (copy of parent)
+  - Child doesn't start at main(), comes to life as if it called fork() itself
+  - Returns **0** to child, **child's PID** to parent, **-1** on failure
+  - Child gets copy of parent's address space and file descriptors
+
 - **exec()**: Transforms calling process into a different program
+  - Loads code and static data, overwrites current code segment
+  - Re-initializes heap and stack
+  - Does NOT create new process
+  - Does NOT return on success (old program is completely replaced)
+  - 6 variants on Linux: execl(), execlp(), execle(), execv(), execvp(), execvpe()
+
 - **wait()**: Parent waits for child to complete
-- **kill()**: Send signals to processes
-- **signal()**: Set up signal handlers
+  - Makes output deterministic (prevents nondeterministic scheduling)
+  - Prevents zombie processes
 
-### fork() Behavior
-- Returns **0** to child process
-- Returns **child's PID** to parent
-- Returns **-1** on failure
-- Child gets copy of parent's address space
+- **Nondeterminism**: CPU scheduler determines which process runs, making output order unpredictable without wait()
 
-### exec() Family
-- Loads new program into current process
-- Does NOT create new process
-- Does NOT return on success (old program is gone)
-- Common variants: execl(), execle(), execv(), execvp()
+### File Descriptors and Redirection
+- File descriptors remain **open across fork()** - child inherits parent's open files
+- File descriptors remain **open across exec()** - enables I/O redirection
+- UNIX searches for free file descriptors starting at **zero**
+- Shell uses this to redirect stdin/stdout before exec()
+
+### Separation of fork() and exec()
+- Allows shell to set up environment between fork and exec
+- Enables: I/O redirection, pipes, background jobs
+- Shell can manipulate child's file descriptors before running new program
 
 ### Practice Questions
 
-1. What does fork() return to the parent process? To the child?
+1. **What does fork() return to the parent process? To the child? On failure?**
+   - **Answer**: Parent receives child's PID, child receives 0, failure returns -1
 
-2. After fork(), how many processes are running? What is the relationship between them?
+2. **After fork(), does the child start executing at main()? Where does it start?**
+   - **Answer**: No, child comes to life as if it had called fork() itself, returning from fork() with value 0
 
-3. Why would you call fork() followed by exec()?
+3. **What happens to the heap, stack, and code segment when exec() is called successfully?**
+   - **Answer**: Code segment is overwritten with new program code, heap and stack are re-initialized. The old program is completely replaced.
 
-4. Write the typical pattern: parent forks a child, child runs `/bin/ls`, parent waits for completion.
+4. **Why do file descriptors remain open across exec()? How does this enable I/O redirection?**
+   - **Answer**: Keeping file descriptors open allows the shell to redirect stdin/stdout before exec(). Shell closes stdin, opens file (gets fd 0), then exec() - new program inherits redirected I/O.
 
-5. What happens if you call exec() without fork() first?
+5. **Explain why the separation of fork() and exec() is useful for shells.**
+   - **Answer**: Between fork() and exec(), the shell can modify the child's environment: set up pipes, redirect I/O, change working directory, etc., before running the new program.
 
-6. If fork() fails, what value does it return and why might it fail?
+6. **What is nondeterminism in process execution? How does wait() solve it?**
+   - **Answer**: Nondeterminism means the scheduler decides which process runs when, making output order unpredictable. wait() forces parent to wait until child completes, making execution deterministic.
 
-7. What is the purpose of wait() or waitpid()?
-
-8. If a parent doesn't call wait() on its child, what problem can occur?
-
-9. What happens to open file descriptors after fork()?
-
-10. Explain the output when this code runs:
-    ```c
-    printf("A");
-    fork();
-    printf("B");
-    ```
-
-11. What is a zombie process?
-
-12. What is an orphan process?
-
-13. How does the shell use fork() and exec() to run commands?
-
-14. Can a child process affect the parent's variables after fork()?
-
-15. What signal does kill() send by default?
+7. **What happens if you call exec() without fork() first?**
+   - **Answer**: The calling process is replaced by the new program. Useful in shells, but means you lose the original program entirely.
 
 ---
 
