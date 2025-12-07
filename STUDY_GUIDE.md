@@ -2051,37 +2051,197 @@ This is why **TLB hit rate is critical** for performance!
 
 ## Chapters 26/27: Introduction to Concurrency
 
-### Why Concurrency?
-- **Parallelism**: Use multiple CPUs simultaneously
-- **Avoid blocking**: One thread waits for I/O, another runs
-- **Better structure**: Separate concerns (e.g., UI thread + worker thread)
+### The Crux: How To Support Synchronization
 
-### Thread vs Process
-- **Process**: Own address space, heavy context switch
-- **Thread**: Share address space, light context switch
-- Threads share: code, heap, globals
-- Threads private: stack, registers
+**What support do we need from the hardware in order to build useful synchronization primitives? What support do we need from the OS? How can we build these primitives correctly and efficiently? How can programs use them to get the desired results?**
 
-### The Problem: Race Conditions
-- **Race condition**: Outcome depends on execution timing
-- Occurs when multiple threads access shared data without synchronization
-- **Critical section**: Code that accesses shared resource
+### Thread Abstraction
 
-### Visual: Thread Memory Layout
+**Classic process**: Single point of execution (one PC fetching and executing instructions)
+
+**Multi-threaded process**: More than one point of execution (**multiple PCs**, each being fetched and executed from)
+
+**Key insight**: Each thread is like a separate process, **except** they share the same address space and thus can access the same data.
+
+### Thread State
+
+**Each thread has**:
+- **Program Counter (PC)**: Tracks where thread is fetching instructions
+- **Private set of registers** for computation
+- **Own stack** (thread-local storage for local variables, parameters, return values)
+
+**Thread Control Block (TCB)**: Stores state of each thread (similar to PCB for processes)
+
+### Context Switch Between Threads
+
+**Similar to process context switch**:
+- Save register state of T1 to its TCB
+- Restore register state of T2 from its TCB
+
+**Major difference**: **Address space remains the same**
+- No need to switch page tables (unlike process context switch)
+- This is why thread switching is **much faster** than process switching
+
+### Multi-Threaded Address Space
+
+**Single-threaded process**: One stack at bottom of address space
+
+**Multi-threaded process**: **One stack per thread** spread throughout address space
+
 ```
-Process Address Space:
-┌──────────────┐
-│    Code      │ ← Shared by all threads
-├──────────────┤
-│    Heap      │ ← Shared
-├──────────────┤
-│  Thread 1    │ ← Private stack
-│   Stack      │
-├──────────────┤
-│  Thread 2    │ ← Private stack
-│   Stack      │
-└──────────────┘
+Single-Threaded:              Multi-Threaded (2 threads):
+0KB  ┌─────────────┐         0KB  ┌─────────────┐
+     │ Program Code│              │ Program Code│
+1KB  ├─────────────┤         1KB  ├─────────────┤
+     │    Heap     │              │    Heap     │
+2KB  │      ↓      │         2KB  ├─────────────┤
+     │             │              │   (free)    │
+     │             │              │             │
+     │      ↑      │              ├─────────────┤
+15KB │   Stack     │              │  Stack (2)  │  ← Thread 2 stack
+16KB └─────────────┘              ├─────────────┤
+                                  │   (free)    │
+                             15KB ├─────────────┤
+                                  │  Stack (1)  │  ← Thread 1 stack
+                             16KB └─────────────┘
 ```
+
+**Thread-local storage**: Stack-allocated variables, parameters, return values placed in the stack of the relevant thread
+
+### Why Use Threads?
+
+**Reason 1: Parallelism**
+- Use multiple CPUs to speed up programs
+- Example: Adding two large arrays
+  - Single CPU: Process sequentially
+  - Multiple CPUs: Each CPU processes a portion → **much faster**
+- **Parallelization**: Transforming single-threaded program to use multiple CPUs
+- Thread per CPU is natural way to make programs faster on modern hardware
+
+**Reason 2: Avoid Blocking Due to Slow I/O**
+- Instead of waiting for I/O (disk, network, page fault), do something else
+- While one thread waits (blocked for I/O), CPU scheduler switches to other ready threads
+- **Overlap I/O with computation** within single program
+- Like multiprogramming for processes, but within one program
+- Why modern servers (web servers, databases) use threads extensively
+
+**Why not use processes?**
+- Could use multiple processes instead
+- But threads **share address space** → easy to share data
+- Threads are natural choice when sharing data structures needed
+- Processes better for logically separate tasks with little sharing
+
+### The Problem: Shared Data and Race Conditions
+
+**Example**: Two threads each increment shared counter 10 million times
+```c
+static volatile int counter = 0;
+
+void *mythread(void *arg) {
+    for (int i = 0; i < 10000000; i++) {
+        counter = counter + 1;  // Critical section
+    }
+}
+```
+
+**Expected result**: 20,000,000
+
+**Actual result**: Sometimes 19,345,221, sometimes 19,221,041, sometimes correct!
+
+**Why?** The single C statement `counter = counter + 1` compiles to **three assembly instructions**:
+
+```assembly
+mov 0x8049a1c, %eax   # Load counter into register
+add $0x1, %eax        # Increment register
+mov %eax, 0x8049a1c   # Store register back to counter
+```
+
+**The race condition**:
+1. Thread 1 loads counter (50) into eax
+2. Thread 1 increments eax to 51
+3. **INTERRUPT** - Thread 1 paused, Thread 2 runs
+4. Thread 2 loads counter (still 50!) into eax
+5. Thread 2 increments eax to 51
+6. Thread 2 stores 51 to counter
+7. **INTERRUPT** - Thread 1 resumes
+8. Thread 1 stores eax (51) to counter
+9. **Result**: counter = 51 (should be 52!)
+
+### Key Concurrency Terms (Dijkstra)
+
+**Critical Section**:
+- Piece of code that accesses shared resource (variable, data structure, etc.)
+- **Must not** be concurrently executed by more than one thread
+- Example: The three instructions updating counter
+
+**Race Condition (Data Race)**:
+- Results depend on **timing** of code execution
+- Multiple threads enter critical section at roughly same time
+- Both attempt to update shared data → surprising outcome
+
+**Indeterminate Program**:
+- Contains one or more race conditions
+- Output **varies** from run to run depending on which threads ran when
+- Not **deterministic** (what we expect from computers!)
+
+**Mutual Exclusion**:
+- Property that guarantees only **one thread** executing in critical section
+- If one thread in critical section, others **prevented** from entering
+- What we need to solve the race condition problem
+
+**All these terms coined by Edsger Dijkstra** (Turing Award winner, 1968 paper "Cooperating Sequential Processes")
+
+### The Wish For Atomicity
+
+**Atomicity**: Execute as a unit, "**all or nothing**"
+- Either all actions in group occur, or none occur
+- No in-between state visible
+- Also called a **transaction** (from database systems)
+
+**What we want**: Execute the three-instruction sequence atomically:
+```assembly
+mov 0x8049a1c, %eax
+add $0x1, %eax
+mov %eax, 0x8049a1c
+```
+
+**Hardware solution**: Could have powerful atomic instruction like:
+```assembly
+memory-add 0x8049a1c, $0x1  # Atomic increment of memory location
+```
+
+Hardware guarantees: When interrupt occurs, instruction has either not run at all, or has run to completion. No in-between state.
+
+**Problem**: Can't have atomic instruction for everything (imagine "atomic update of B-tree"!)
+
+**Real solution**:
+- Hardware provides a few useful **atomic instructions**
+- OS provides help
+- Build general **synchronization primitives** on top
+- Use these primitives to build correct multi-threaded code
+
+### One More Problem: Waiting For Another
+
+Besides atomicity, threads often need to **wait** for each other:
+- One thread must wait for another to complete some action before continuing
+- Example: Process performs disk I/O and is put to sleep; when I/O completes, process needs to be woken up
+
+Coming chapters cover:
+1. **Synchronization primitives** for atomicity (locks)
+2. **Mechanisms for sleeping/waking** interaction (condition variables)
+
+### Why in OS Class?
+
+**History**: OS was the **first concurrent program**
+- Interrupts can occur at any time
+- OS must update kernel data structures (page tables, process lists, file system structures, bitmaps, inodes)
+- These are **critical sections** that must be protected
+- Techniques created for OS, later used by application programmers
+
+**Example**: Two processes call write() to append to same file
+- Both must: allocate new block, update inode, change file size
+- Interrupt can occur anytime → critical sections must be synchronized
+- Virtually every kernel data structure must be carefully accessed with proper synchronization
 
 ### Practice Questions with Answers
 
