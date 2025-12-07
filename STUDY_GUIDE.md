@@ -1459,6 +1459,280 @@ Both reduce TLB misses, making paging efficient in practice.
 
 ---
 
+## Chapter 20: Paging - Smaller Tables
+
+### The Crux: How To Make Page Tables Smaller?
+
+**Simple array-based page tables (linear page tables) are too big, taking up far too much memory on typical systems. How can we make page tables smaller? What are the key ideas? What inefficiencies arise as a result of these new data structures?**
+
+### The Problem: Page Tables Are Too Big
+
+With 32-bit address space and 4KB pages:
+- Virtual address space = 2^32 bytes = **4GB**
+- Page size = 4KB = 2^12 bytes
+- Number of pages = 4GB / 4KB = **2^20 = 1 million pages**
+- Each PTE = 4 bytes
+- **Page table size = 4MB per process**
+
+With 100 processes: **400MB** just for page tables! Most of that space is wasted (invalid pages).
+
+### Solution 1: Bigger Pages
+
+**Idea**: Use larger pages (e.g., 16KB instead of 4KB)
+- Fewer pages → smaller page table
+- Example: 16KB pages → 2^18 = 256K pages → 1MB page table
+
+**Problem**: **Internal fragmentation**
+- Large pages waste space inside each page
+- Application uses small portion of page → rest wasted
+- **Not commonly used** (except for specific use cases like large databases)
+
+### Solution 2: Hybrid Approach (Paging + Segmentation)
+
+**Idea**: Combine paging and segmentation (from Multics system)
+- One page table **per segment** (code, heap, stack)
+- Base register points to page table for that segment
+- Bounds register indicates end of page table
+
+**Advantages**:
+- Unallocated pages between stack and heap don't need page table entries
+- Saves memory compared to linear page table
+
+**Disadvantages**:
+- Still have **segmentation problems** (external fragmentation)
+- Not flexible if sparse address space (large but sparsely used heap)
+- **Not widely used** in modern systems
+
+### Solution 3: Multi-Level Page Tables (Most Important!)
+
+**The key idea**: Turn linear page table into **tree structure**
+- Chop up page table into **page-sized units**
+- If entire page of PTEs invalid → don't allocate that page
+- Use **page directory** to track which pages of page table are allocated
+
+**Two-level page table structure**:
+
+```
+Page Directory (points to pages of page table)
+    ↓
+Page Table Pages (contains actual PTEs)
+    ↓
+Physical Memory Pages
+```
+
+**Advantages**:
+1. **Only allocate page table space proportional to amount of address space in use**
+   - Sparse address spaces use much less memory
+   - Growing address space easier (just allocate new page table pages)
+2. **Each page table page fits in a page** → can be swapped if memory tight
+3. **Widely used** in modern systems (x86, ARM, etc.)
+
+**Disadvantages**:
+1. **Time-space trade-off**: Saves space but costs time
+   - On TLB miss: must load **two** PTEs from memory (directory entry + actual PTE)
+   - More complex to manage
+2. **More memory lookups** on TLB miss:
+   - Without TLB: 1 load for PTE + 1 for data = **2 loads**
+   - With 2-level: 1 for directory + 1 for PTE + 1 for data = **3 loads**
+   - TLB critically important!
+
+### Multi-Level Page Table Example (x86)
+
+**32-bit address breakdown** (two-level):
+```
+| VPN (20 bits)     | Offset (12 bits) |
+| PDI (10) | PTI (10) | Offset (12)     |
+```
+
+- **PDI** (Page Directory Index): Index into page directory (2^10 = 1024 entries)
+- **PTI** (Page Table Index): Index into page table (2^10 = 1024 entries)
+- **Offset**: Byte within page (4KB = 2^12)
+
+**Address translation with two-level table**:
+```
+1. Extract PDI from virtual address
+2. PDEAddr = PDBR + (PDI × sizeof(PDE))  // Page Directory Base Register
+3. PDE = Memory[PDEAddr]
+4. if (PDE.Valid == False): raise exception
+5. PTEAddr = (PDE.PFN << SHIFT) + (PTI × sizeof(PTE))
+6. PTE = Memory[PTEAddr]
+7. if (PTE.Valid == False): raise exception
+8. PhysAddr = (PTE.PFN << SHIFT) + Offset
+```
+
+**Three-level and beyond**:
+- 64-bit address spaces require **more levels** (x86-64 uses 4 levels)
+- More levels = even more memory lookups on TLB miss
+- **TLB becomes even more critical** for performance
+
+### Solution 4: Inverted Page Tables
+
+**Idea**: Instead of one entry per virtual page, have **one entry per physical page**
+- Page table size determined by **physical memory**, not virtual
+- Example: 1GB physical memory, 4KB pages → 256K entries (only 1MB for page table!)
+
+**Structure**:
+```
+Physical Frame | VPN | ASID
+      0        | ... | ...
+      1        | ... | ...
+     ...
+```
+
+**Translation**:
+- Search page table for matching (VPN, ASID)
+- Index in table = physical frame number
+- **Problem**: Linear scan is slow → use **hash table** to speed up lookup
+
+**Advantages**: Very **compact** (size based on physical memory)
+
+**Disadvantages**: Reverse lookup is **slower** (even with hash table)
+
+### Swapping Page Tables to Disk
+
+Since page table pages fit in pages, kernel can **swap** them to disk if memory tight
+- Page directory entries have **present bit**
+- If present bit = 0, page table page on disk
+- **Page fault** when accessing → OS loads page table page from disk
+
+Allows system to support very large address spaces even when memory constrained.
+
+### Practice Questions with Answers
+
+**Q1: Why are simple linear page tables impractical for modern systems? Calculate the page table size for a 32-bit address space with 4KB pages and 4-byte PTEs.**
+
+**Answer:**
+- Address space = 2^32 = 4GB
+- Page size = 4KB = 2^12
+- Number of pages = 4GB / 4KB = 2^20 = 1,048,576 pages
+- PTE size = 4 bytes
+- **Page table size = 1,048,576 × 4 = 4,194,304 bytes = 4MB per process**
+
+With 100 processes: **400MB** just for page tables! Most entries are invalid (wasted space). Linear page tables don't scale.
+
+**Q2: Explain the time-space trade-off in multi-level page tables. Why does this make TLBs even more important?**
+
+**Answer:**
+**Space saving**: Multi-level tables only allocate page table space for used portions of address space (sparse allocation). Sparse address spaces use much less memory than linear tables.
+
+**Time cost**: On TLB miss, need **multiple memory accesses**:
+- Linear table: 1 PTE load + 1 data = **2 memory accesses**
+- Two-level: 1 page directory + 1 PTE + 1 data = **3 memory accesses**
+- Four-level (x86-64): **5 memory accesses** total!
+
+**Why TLB critical**: On **TLB hit**, only **1 memory access** (for data). The TLB eliminates extra page table lookups, making the time cost negligible in practice. Without TLB, multi-level tables would be unacceptably slow.
+
+**Q3: For a two-level page table on x86 (4KB pages), how is a 32-bit virtual address broken down? Show the calculation for translating VPN to page directory and page table indices.**
+
+**Answer:**
+**Address breakdown**:
+```
+| Page Directory Index | Page Table Index | Offset |
+|      10 bits        |     10 bits      | 12 bits|
+```
+
+- **Offset**: 12 bits → 2^12 = 4KB page
+- **PTI** (Page Table Index): 10 bits → 2^10 = 1024 PTEs per page table page
+- **PDI** (Page Directory Index): 10 bits → 2^10 = 1024 page directory entries
+
+**Example**: Virtual address = `0x00403004`
+- Binary: `00 0000 0100 | 00 0000 0011 | 0000 0000 0100`
+- PDI = `0000000100` = **4**
+- PTI = `0000000011` = **3**
+- Offset = `000000000100` = **4**
+
+**Translation**:
+1. Page directory entry 4 → gives PFN of page table page
+2. Page table entry 3 in that page → gives PFN of actual data page
+3. Offset 4 within that page → final physical address
+
+**Q4: How does a multi-level page table save memory compared to a linear page table? Give a concrete example.**
+
+**Answer:**
+**Linear page table**: Must allocate **all** PTEs, even for invalid pages
+- 32-bit address, 4KB pages → **4MB page table** (all 1M entries)
+
+**Multi-level page table**: Only allocate page table pages for **valid** regions
+
+**Example**: Process uses:
+- Code: 1MB (at bottom of address space)
+- Heap: 2MB (growing upward)
+- Stack: 1MB (at top of address space)
+- **Total**: 4MB of 4GB address space used
+
+**Linear**: 4MB for page table
+
+**Two-level**:
+- Page directory: 1 page = **4KB**
+- Code region: 1MB / 4KB = 256 pages → needs 256 PTEs → **1 page table page (4KB)**
+- Heap: 2MB → 512 PTEs → **2 page table pages (8KB)**
+- Stack: 1MB → 256 PTEs → **1 page table page (4KB)**
+- **Total**: 4KB + 4KB + 8KB + 4KB = **20KB** (200x smaller!)
+
+**Q5: What is an inverted page table? What are its advantages and disadvantages?**
+
+**Answer:**
+**Inverted page table**: **One entry per physical frame** (not per virtual page)
+- Size determined by **physical memory**, not virtual address space
+- Entry contains: (VPN, ASID) for process using that frame
+
+**Example**: 1GB physical memory, 4KB pages
+- Frames = 1GB / 4KB = 256K frames
+- Page table = 256K entries × 8 bytes = **2MB** (vs 400MB for 100 linear page tables)
+
+**Advantages**:
+- **Very compact** - grows with physical memory, not virtual
+- Fixed size regardless of number of processes
+
+**Disadvantages**:
+- **Slow translation** - must search table for matching (VPN, ASID)
+- Requires hash table to speed up lookups
+- Still slower than multi-level forward page tables with TLB
+
+**Used in**: IBM PowerPC, older systems
+
+**Q6: Why is using bigger pages (e.g., 16KB instead of 4KB) not a widely adopted solution for reducing page table size?**
+
+**Answer:**
+**How it helps**: Bigger pages → fewer pages → smaller page table
+- 4KB pages: 1M pages → 4MB table
+- 16KB pages: 256K pages → 1MB table
+
+**Why not used**:
+- **Internal fragmentation**: Application allocates 16KB page but only uses 4KB → **12KB wasted**
+- Small applications waste significant memory
+- **Trade-off gets worse**: 2MB pages (x86 "huge pages") → massive waste for small allocations
+
+**Where it IS used**:
+- Large databases, scientific computing (huge datasets)
+- Increase TLB coverage for large working sets
+- **Optional/selective**, not default for all processes
+
+**Multi-level page tables** are preferred: save space without internal fragmentation.
+
+**Q7: Describe the address translation process for a two-level page table. What happens on a TLB miss with this structure?**
+
+**Answer:**
+**On TLB hit** (common case):
+1. TLB contains (VPN → PFN) mapping
+2. PhysAddr = (PFN << 12) | Offset
+3. Access memory once → **1 memory access total**
+
+**On TLB miss** (two-level table):
+1. **Extract PDI** (page directory index) from VPN
+2. **Load page directory entry**: `PDE = Memory[PDBR + PDI × 4]` → **Memory access #1**
+3. Check PDE.Valid (if 0 → page fault)
+4. **Extract PTI** (page table index) from VPN
+5. **Load page table entry**: `PTE = Memory[(PDE.PFN << 12) + PTI × 4]` → **Memory access #2**
+6. Check PTE.Valid (if 0 → page fault)
+7. **Access data**: `Data = Memory[(PTE.PFN << 12) + Offset]` → **Memory access #3**
+8. **Update TLB** with (VPN → PFN) mapping
+9. **Total on TLB miss: 3 memory accesses** (vs 1 on TLB hit)
+
+This is why **TLB hit rate is critical** for performance!
+
+---
+
 ## Chapters 26/27: Introduction to Concurrency
 
 ### Why Concurrency?
