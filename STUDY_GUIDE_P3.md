@@ -330,3 +330,699 @@ void *producer(void *arg) {
 }
 ```
 
+---
+
+## Chapter 31: Semaphores
+
+### The Crux: How To Use Semaphores
+How can we use semaphores instead of locks and condition variables? What is the definition of a semaphore? What is a binary semaphore? Is it straightforward to build a semaphore out of locks and condition variables? To build locks and condition variables out of semaphores?
+
+### Key Concepts
+
+**What is a Semaphore?**
+- A **semaphore** is an object with an integer value that we can manipulate with two routines: `sem_wait()` and `sem_post()`
+- Invented by Dijkstra as a single primitive for all things related to synchronization
+- Can be used as **both locks and condition variables**
+
+**POSIX Semaphore Calls:**
+```c
+#include <semaphore.h>
+sem_t s;
+sem_init(&s, 0, 1);  // Initialize to value 1
+
+int sem_wait(sem_t *s) {
+    decrement the value of semaphore s by one
+    wait if value of semaphore s is negative
+}
+
+int sem_post(sem_t *s) {
+    increment the value of semaphore s by one
+    if there are one or more threads waiting, wake one
+}
+```
+
+**Important Properties:**
+1. `sem_wait()` will either return right away (if value ≥ 0) or block the caller
+2. `sem_post()` does not wait - it simply increments and wakes a waiting thread if any
+3. When negative, the value equals the number of waiting threads (Dijkstra's invariant)
+4. The operations are performed **atomically**
+
+### Binary Semaphores (Locks)
+
+**Using a semaphore as a lock:**
+```c
+sem_t m;
+sem_init(&m, 0, 1);  // Initialize to 1 for lock
+
+sem_wait(&m);
+// critical section here
+sem_post(&m);
+```
+
+**Initial value should be 1** because:
+- First thread calls `sem_wait()`: decrements to 0, continues (lock acquired)
+- Second thread calls `sem_wait()`: decrements to -1, blocks (lock held by first thread)
+- First thread calls `sem_post()`: increments to 0, wakes second thread
+
+**Why called binary semaphore:**
+- Only two states: held (0 or negative) and not held (1)
+- Acts exactly like a lock
+
+### Semaphores For Ordering
+
+**Parent waiting for child example:**
+```c
+sem_t s;
+
+void *child(void *arg) {
+    printf("child\n");
+    sem_post(&s);  // signal here: child is done
+    return NULL;
+}
+
+int main(int argc, char *argv[]) {
+    sem_init(&s, 0, 0);  // Initialize to 0 for ordering!
+    printf("parent: begin\n");
+    pthread_t c;
+    Pthread_create(&c, NULL, child, NULL);
+    sem_wait(&s);  // wait here for child
+    printf("parent: end\n");
+    return 0;
+}
+```
+
+**Initial value should be 0** because:
+- **Case 1** (Parent runs first): Parent calls `sem_wait()`, decrements to -1, sleeps. Child runs, calls `sem_post()`, increments to 0, wakes parent.
+- **Case 2** (Child runs first): Child calls `sem_post()`, increments to 1. Parent calls `sem_wait()`, decrements to 0, continues without sleeping.
+
+**Rule for semaphore initialization:**
+Think about the number of resources you're willing to give away immediately:
+- Lock: 1 (one thread can acquire it)
+- Ordering: 0 (nothing to give away until event happens)
+
+### Producer/Consumer Problem with Semaphores
+
+**Correct Solution:**
+```c
+int buffer[MAX];
+int fill = 0;
+int use = 0;
+
+sem_t empty;  // Tracks empty slots
+sem_t full;   // Tracks full slots
+sem_t mutex;  // Protects buffer manipulation
+
+void *producer(void *arg) {
+    int i;
+    for (i = 0; i < loops; i++) {
+        sem_wait(&empty);      // Wait for empty slot
+        sem_wait(&mutex);      // Acquire lock
+        put(i);
+        sem_post(&mutex);      // Release lock
+        sem_post(&full);       // Signal full slot
+    }
+}
+
+void *consumer(void *arg) {
+    int i;
+    for (i = 0; i < loops; i++) {
+        sem_wait(&full);       // Wait for full slot
+        sem_wait(&mutex);      // Acquire lock
+        int tmp = get();
+        sem_post(&mutex);      // Release lock
+        sem_post(&empty);      // Signal empty slot
+        printf("%d\n", tmp);
+    }
+}
+
+int main() {
+    sem_init(&empty, 0, MAX);  // MAX empty slots initially
+    sem_init(&full, 0, 0);     // 0 full slots initially
+    sem_init(&mutex, 0, 1);    // Binary semaphore for lock
+    // ...
+}
+```
+
+**Why this works:**
+- `empty` and `full` track available resources (empty/full buffer slots)
+- `mutex` provides mutual exclusion for buffer manipulation
+- **Order matters!** Must wait for resource (empty/full) before acquiring mutex
+  - Otherwise: Deadlock! (Holding mutex while waiting for resource)
+
+**Common Mistake - Deadlock:**
+```c
+void *producer(void *arg) {
+    sem_wait(&mutex);   // WRONG ORDER!
+    sem_wait(&empty);   // Can deadlock here
+    put(i);
+    sem_post(&mutex);
+    sem_post(&full);
+}
+```
+If all buffers full and producer holds mutex, it blocks waiting for `empty`. Consumers can't get mutex to empty buffers. Deadlock!
+
+### Reader-Writer Locks (31.5) ⚠️ EXAM FOCUS
+
+**Problem:** Allow multiple concurrent readers OR one exclusive writer.
+
+**Complete Implementation (THIS CODE WILL BE ON THE EXAM):**
+```c
+typedef struct _rwlock_t {
+    sem_t lock;       // binary semaphore (basic lock)
+    sem_t writelock;  // allow ONE writer/MANY readers
+    int   readers;    // #readers in critical section
+} rwlock_t;
+
+void rwlock_init(rwlock_t *rw) {
+    rw->readers = 0;
+    sem_init(&rw->lock, 0, 1);
+    sem_init(&rw->writelock, 0, 1);
+}
+
+void rwlock_acquire_readlock(rwlock_t *rw) {
+    sem_wait(&rw->lock);
+    rw->readers++;
+    if (rw->readers == 1)  // first reader gets writelock
+        sem_wait(&rw->writelock);
+    sem_post(&rw->lock);
+}
+
+void rwlock_release_readlock(rwlock_t *rw) {
+    sem_wait(&rw->lock);
+    rw->readers--;
+    if (rw->readers == 0)  // last reader lets it go
+        sem_post(&rw->writelock);
+    sem_post(&rw->lock);
+}
+
+void rwlock_acquire_writelock(rwlock_t *rw) {
+    sem_wait(&rw->writelock);
+}
+
+void rwlock_release_writelock(rwlock_t *rw) {
+    sem_post(&rw->writelock);
+}
+```
+
+**How it works:**
+
+1. **First reader** (readers goes 0→1):
+   - Acquires `lock`
+   - Increments `readers` to 1
+   - Acquires `writelock` (blocks any writers)
+   - Releases `lock`
+
+2. **Additional readers** (readers > 1):
+   - Acquire `lock`
+   - Increment `readers`
+   - Skip `writelock` (already held by first reader)
+   - Release `lock`
+   - Now multiple readers are in critical section concurrently
+
+3. **Last reader** (readers goes N→0):
+   - Acquires `lock`
+   - Decrements `readers` to 0
+   - Releases `writelock` (allows writers)
+   - Releases `lock`
+
+4. **Writer**:
+   - Simply acquires `writelock` (blocks if any readers)
+   - Exclusive access
+   - Releases `writelock` when done
+
+**Fairness Issue:**
+- Readers can **starve writers**
+- As long as readers keep arriving, writer never gets `writelock`
+- More sophisticated solutions exist to prevent starvation
+
+### The Dining Philosophers Problem
+
+**Setup:**
+- 5 philosophers sitting around table
+- 5 forks (one between each pair)
+- Each philosopher thinks, then eats (needs both left and right fork)
+- Challenge: No deadlock, no starvation, high concurrency
+
+**Helper functions:**
+```c
+int left(int p)  { return p; }
+int right(int p) { return (p + 1) % 5; }
+```
+
+**Broken Solution (Deadlock):**
+```c
+sem_t forks[5];  // Each initialized to 1
+
+void get_forks(int p) {
+    sem_wait(&forks[left(p)]);   // Grab left fork
+    sem_wait(&forks[right(p)]);  // Grab right fork
+}
+
+void put_forks(int p) {
+    sem_post(&forks[left(p)]);
+    sem_post(&forks[right(p)]);
+}
+```
+
+**Why it deadlocks:**
+If all philosophers grab their left fork simultaneously, each waits for right fork forever. Classic circular wait.
+
+**Working Solution (Breaking the Dependency):**
+```c
+void get_forks(int p) {
+    if (p == 4) {  // Last philosopher gets forks in opposite order
+        sem_wait(&forks[right(p)]);
+        sem_wait(&forks[left(p)]);
+    } else {
+        sem_wait(&forks[left(p)]);
+        sem_wait(&forks[right(p)]);
+    }
+}
+```
+
+**Why this works:**
+Philosopher 4 tries right-then-left, breaking the circular dependency. No situation where all philosophers hold one fork and wait for another.
+
+### Thread Throttling
+
+**Problem:** Prevent "too many" threads from executing a resource-intensive section simultaneously.
+
+**Solution:** Use semaphore initialized to maximum allowed concurrent threads.
+
+```c
+sem_t throttle;
+sem_init(&throttle, 0, MAX_CONCURRENT);  // e.g., 10
+
+// In each thread:
+sem_wait(&throttle);      // Acquire slot
+// memory-intensive work here
+sem_post(&throttle);      // Release slot
+```
+
+**Use case:** If 100 threads all enter memory-intensive region, system thrashes. Throttling limits to (e.g.) 10 concurrent threads in that region.
+
+### Implementing Semaphores (Zemaphores)
+
+**Building semaphores from locks and condition variables:**
+```c
+typedef struct __Zem_t {
+    int value;
+    pthread_cond_t cond;
+    pthread_mutex_t lock;
+} Zem_t;
+
+void Zem_init(Zem_t *s, int value) {
+    s->value = value;
+    Cond_init(&s->cond);
+    Mutex_init(&s->lock);
+}
+
+void Zem_wait(Zem_t *s) {
+    Mutex_lock(&s->lock);
+    while (s->value <= 0)
+        Cond_wait(&s->cond, &s->lock);
+    s->value--;
+    Mutex_unlock(&s->lock);
+}
+
+void Zem_post(Zem_t *s) {
+    Mutex_lock(&s->lock);
+    s->value++;
+    Cond_signal(&s->cond);
+    Mutex_unlock(&s->lock);
+}
+```
+
+**Note:** Building condition variables from semaphores is much trickier and error-prone!
+
+---
+
+## Practice Questions for Chapter 31
+
+### Question 1: Binary Semaphore as Lock
+**Q**: A semaphore initialized to 1 is used as a lock. Two threads (T0 and T1) try to acquire it. Walk through the semaphore value and thread states as T0 acquires, then T1 tries to acquire, then T0 releases.
+
+**A**:
+
+| Semaphore Value | Thread T0 Action | T0 State | Thread T1 Action | T1 State |
+|-----------------|------------------|----------|------------------|----------|
+| 1 | - | Ready | - | Ready |
+| 1 | call sem_wait() | Run | - | Ready |
+| 0 | decrement, continue | Run | - | Ready |
+| 0 | (in critical section) | Run | - | Ready |
+| 0 | - | Run | call sem_wait() | Run |
+| -1 | - | Run | decrement | Run |
+| -1 | - | Run | (value < 0) → sleep | **Sleep** |
+| -1 | call sem_post() | Run | - | Sleep |
+| 0 | increment | Run | - | Sleep |
+| 0 | wake(T1) | Run | - | **Ready** |
+| 0 | - | Ready | sem_wait() returns | Run |
+
+Key points:
+- Initial value 1 allows first thread through
+- Second thread decrements to -1 and blocks
+- When value is negative, it equals number of waiting threads
+- Post increments to 0 and wakes T1
+
+### Question 2: Semaphore for Ordering
+**Q**: Explain why a semaphore used for ordering (like parent waiting for child) is initialized to 0, not 1. What would go wrong if initialized to 1?
+
+**A**:
+
+**Initialized to 0 (CORRECT):**
+- Parent calls `sem_wait()`: decrements to -1, blocks until child signals
+- Child calls `sem_post()`: increments to 0, wakes parent
+- Enforces ordering: parent waits for child to finish
+
+**Initialized to 1 (WRONG):**
+```c
+sem_init(&s, 0, 1);  // WRONG!
+
+// Parent
+sem_wait(&s);  // Decrements to 0, continues immediately (NO WAITING!)
+printf("parent: end\n");  // Prints before child runs!
+
+// Child
+sem_post(&s);  // Increments to 1, but parent already done
+```
+
+Problem: Parent doesn't wait! It decrements from 1 to 0 and continues. The parent/child ordering is lost.
+
+**Rule:** For ordering, initialize to the number of resources available at start. For parent/child, there are 0 "completed child" resources initially, so initialize to 0.
+
+### Question 3: Producer/Consumer Deadlock Analysis
+**Q**: In the producer/consumer code, explain why this ordering causes deadlock:
+```c
+void *producer(void *arg) {
+    sem_wait(&mutex);   // Line 1
+    sem_wait(&empty);   // Line 2
+    put(i);
+    sem_post(&mutex);
+    sem_post(&full);
+}
+```
+
+**A**:
+
+**Deadlock scenario:**
+1. Buffer is full (empty = 0, full = MAX)
+2. Producer P1 calls `sem_wait(&mutex)` (Line 1)
+   - Acquires mutex (mutex = 0)
+3. Producer P1 calls `sem_wait(&empty)` (Line 2)
+   - No empty slots! Decrements empty to -1
+   - **P1 blocks while holding mutex**
+4. Consumer C1 tries to consume:
+   - Calls `sem_wait(&mutex)`
+   - **Mutex already held by P1**
+   - **C1 blocks waiting for mutex**
+
+**Result:**
+- P1 holds mutex, waiting for empty slot
+- C1 could provide empty slot, but blocked waiting for mutex
+- Classic deadlock: circular dependency
+
+**Solution:** Wait for resources BEFORE acquiring mutex:
+```c
+sem_wait(&empty);   // First: ensure resource available
+sem_wait(&mutex);   // Then: acquire lock to use it
+```
+
+### Question 4: Reader-Writer Lock Analysis ⚠️ CRITICAL
+**Q**: Given the reader-writer lock code from section 31.5, trace through what happens when:
+1. Reader R1 acquires read lock
+2. Reader R2 acquires read lock (while R1 still holds it)
+3. Writer W1 tries to acquire write lock (while R1 and R2 hold read locks)
+4. R1 releases read lock
+5. R2 releases read lock
+6. W1 acquires write lock
+
+**A**:
+
+**Step 1: R1 acquires read lock**
+```c
+sem_wait(&rw->lock);        // R1 acquires lock, lock = 0
+rw->readers++;              // readers = 1
+if (rw->readers == 1)       // TRUE
+    sem_wait(&rw->writelock);  // R1 acquires writelock, writelock = 0
+sem_post(&rw->lock);        // R1 releases lock, lock = 1
+```
+- State: readers = 1, writelock = 0 (held by readers), lock = 1
+
+**Step 2: R2 acquires read lock**
+```c
+sem_wait(&rw->lock);        // R2 acquires lock, lock = 0
+rw->readers++;              // readers = 2
+if (rw->readers == 1)       // FALSE (readers = 2)
+    // SKIP acquiring writelock (already held!)
+sem_post(&rw->lock);        // R2 releases lock, lock = 1
+```
+- State: readers = 2, writelock = 0 (still held), lock = 1
+- **R1 and R2 both in critical section concurrently!**
+
+**Step 3: W1 tries to acquire write lock**
+```c
+sem_wait(&rw->writelock);   // writelock = 0 (held by readers)
+                            // W1 BLOCKS! Decrements to -1
+```
+- State: readers = 2, writelock = -1, W1 sleeping
+
+**Step 4: R1 releases read lock**
+```c
+sem_wait(&rw->lock);        // R1 acquires lock, lock = 0
+rw->readers--;              // readers = 1
+if (rw->readers == 0)       // FALSE (readers = 1)
+    // SKIP releasing writelock
+sem_post(&rw->lock);        // R1 releases lock, lock = 1
+```
+- State: readers = 1, writelock = -1, W1 still sleeping
+
+**Step 5: R2 releases read lock**
+```c
+sem_wait(&rw->lock);        // R2 acquires lock, lock = 0
+rw->readers--;              // readers = 0
+if (rw->readers == 0)       // TRUE
+    sem_post(&rw->writelock);  // Increments to 0, WAKES W1!
+sem_post(&rw->lock);        // R2 releases lock, lock = 1
+```
+- State: readers = 0, writelock = 0, W1 wakes up
+
+**Step 6: W1 acquires write lock**
+```c
+// W1 returns from sem_wait(&rw->writelock)
+// W1 now has exclusive access
+```
+- State: readers = 0, writelock = 0 (held by W1)
+
+**Key Insights:**
+- First reader acquires `writelock` to block writers
+- Subsequent readers just increment counter (no writelock needed)
+- Last reader releases `writelock` to allow writers
+- Writer simply waits for/holds `writelock` for exclusive access
+
+### Question 5: Dining Philosophers Deadlock
+**Q**: In the broken dining philosophers solution, all 5 philosophers grab their left fork simultaneously. Show the state of each fork semaphore and explain why this is deadlock.
+
+**A**:
+
+**Initial state:**
+All fork semaphores initialized to 1:
+```
+forks[0] = 1, forks[1] = 1, forks[2] = 1, forks[3] = 1, forks[4] = 1
+```
+
+**All philosophers grab left fork simultaneously:**
+```c
+// Philosopher 0: left(0) = 0
+sem_wait(&forks[0]);  // forks[0] = 0
+
+// Philosopher 1: left(1) = 1
+sem_wait(&forks[1]);  // forks[1] = 0
+
+// Philosopher 2: left(2) = 2
+sem_wait(&forks[2]);  // forks[2] = 0
+
+// Philosopher 3: left(3) = 3
+sem_wait(&forks[3]);  // forks[3] = 0
+
+// Philosopher 4: left(4) = 4
+sem_wait(&forks[4]);  // forks[4] = 0
+```
+
+**Current state:**
+```
+forks[0] = 0 (held by P0), forks[1] = 0 (held by P1),
+forks[2] = 0 (held by P2), forks[3] = 0 (held by P3),
+forks[4] = 0 (held by P4)
+```
+
+**Now each tries to grab right fork:**
+```c
+// Philosopher 0: right(0) = 1
+sem_wait(&forks[1]);  // forks[1] = -1, P0 BLOCKS (held by P1)
+
+// Philosopher 1: right(1) = 2
+sem_wait(&forks[2]);  // forks[2] = -1, P1 BLOCKS (held by P2)
+
+// Philosopher 2: right(2) = 3
+sem_wait(&forks[3]);  // forks[3] = -1, P2 BLOCKS (held by P3)
+
+// Philosopher 3: right(3) = 4
+sem_wait(&forks[4]);  // forks[4] = -1, P3 BLOCKS (held by P4)
+
+// Philosopher 4: right(4) = 0
+sem_wait(&forks[0]);  // forks[0] = -1, P4 BLOCKS (held by P0)
+```
+
+**Deadlock - Circular wait:**
+```
+P0 holds fork[0], waits for fork[1] (held by P1)
+P1 holds fork[1], waits for fork[2] (held by P2)
+P2 holds fork[2], waits for fork[3] (held by P3)
+P3 holds fork[3], waits for fork[4] (held by P4)
+P4 holds fork[4], waits for fork[0] (held by P0)
+```
+
+All philosophers stuck in circular dependency!
+
+**Solution:** Make P4 grab forks in opposite order (right then left), breaking the cycle.
+
+### Question 6: Semaphore vs Condition Variable
+**Q**: You're implementing a producer/consumer queue. Compare using:
+- (A) Two semaphores (`empty` and `full`) with a mutex
+- (B) Two condition variables (`empty` and `full`) with a mutex
+
+What are the key differences in the code structure?
+
+**A**:
+
+**Approach A: Semaphores**
+```c
+sem_t empty, full, mutex;
+sem_init(&empty, 0, MAX);  // Tracks resource count
+sem_init(&full, 0, 0);
+sem_init(&mutex, 0, 1);
+
+void *producer(void *arg) {
+    sem_wait(&empty);    // Wait for resource
+    sem_wait(&mutex);    // Then lock
+    put(i);
+    sem_post(&mutex);
+    sem_post(&full);     // Signal resource available
+}
+```
+
+**Approach B: Condition Variables**
+```c
+cond_t empty, full;
+mutex_t mutex;
+int count = 0;  // NEED STATE VARIABLE!
+
+void *producer(void *arg) {
+    Pthread_mutex_lock(&mutex);     // Lock FIRST
+    while (count == MAX)            // MUST use while loop
+        Pthread_cond_wait(&empty, &mutex);  // Wait on condition
+    put(i);
+    count++;
+    Pthread_cond_signal(&full);
+    Pthread_mutex_unlock(&mutex);
+}
+```
+
+**Key Differences:**
+
+1. **State tracking:**
+   - Semaphores: Value tracks resource count automatically
+   - CVs: Need explicit state variable (`count`)
+
+2. **Lock ordering:**
+   - Semaphores: Wait for resource BEFORE acquiring mutex
+   - CVs: Acquire mutex FIRST, then check condition
+
+3. **Condition checking:**
+   - Semaphores: Implicit (value >= 0)
+   - CVs: Explicit while loop (MUST use while, not if)
+
+4. **Simplicity:**
+   - Semaphores: More concise, fewer lines
+   - CVs: More explicit, clearer intent
+
+5. **Flexibility:**
+   - CVs: More flexible (can broadcast, complex predicates)
+   - Semaphores: Simpler, but less expressive
+
+### Question 7: Thread Throttling
+**Q**: You have 100 threads, each needing to allocate 100MB of memory temporarily. Your system has 2GB of RAM. If all threads allocate simultaneously, the system will thrash. Write code using semaphores to limit to 10 concurrent allocations.
+
+**A**:
+
+```c
+#include <semaphore.h>
+
+#define NUM_THREADS 100
+#define MAX_CONCURRENT_ALLOCS 10
+#define ALLOC_SIZE_MB 100
+
+sem_t throttle;
+
+void *worker_thread(void *arg) {
+    int id = (int)arg;
+
+    // Phase 1: Work that doesn't need memory
+    printf("Thread %d: doing work without memory\n", id);
+    do_some_work();
+
+    // Phase 2: Need to allocate memory - throttle here
+    sem_wait(&throttle);  // Acquire one of 10 slots
+
+    printf("Thread %d: acquired throttle slot\n", id);
+    void *memory = malloc(ALLOC_SIZE_MB * 1024 * 1024);
+
+    // Memory-intensive work
+    printf("Thread %d: doing memory-intensive work\n", id);
+    process_with_memory(memory);
+
+    free(memory);
+    sem_post(&throttle);  // Release slot
+    printf("Thread %d: released throttle slot\n", id);
+
+    // Phase 3: More work without memory
+    do_more_work();
+
+    return NULL;
+}
+
+int main() {
+    pthread_t threads[NUM_THREADS];
+
+    // Initialize throttle semaphore to 10
+    // This allows UP TO 10 threads in memory-intensive section
+    sem_init(&throttle, 0, MAX_CONCURRENT_ALLOCS);
+
+    // Create 100 threads
+    for (int i = 0; i < NUM_THREADS; i++) {
+        pthread_create(&threads[i], NULL, worker_thread, (void*)i);
+    }
+
+    // Wait for all
+    for (int i = 0; i < NUM_THREADS; i++) {
+        pthread_join(threads[i], NULL);
+    }
+
+    sem_destroy(&throttle);
+    return 0;
+}
+```
+
+**How it works:**
+- Semaphore initialized to 10 (max concurrent allocations)
+- First 10 threads: `sem_wait()` succeeds, value goes 10→9→8...→0
+- Thread 11: `sem_wait()` blocks (value would go negative)
+- When thread finishes and calls `sem_post()`, value goes 0→1, thread 11 wakes
+- **Result:** Never more than 10 threads with allocated memory
+- System uses max 10 × 100MB = 1GB (safe, no thrashing)
+
+**Benefits:**
+- Simple admission control
+- Prevents resource exhaustion
+- Allows other 90 threads to continue non-memory-intensive work
+
