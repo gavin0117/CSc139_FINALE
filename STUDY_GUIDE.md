@@ -214,86 +214,110 @@ A context switch involves **two different types** of register saves/restores:
 
 ## Chapter 7 & 8: Scheduling
 
-### Key Scheduling Algorithms
-
-**FIFO (First In First Out)**: Run jobs in order of arrival
-**SJF (Shortest Job First)**: Run shortest job first (non-preemptive)
-**STCF (Shortest Time-to-Completion First)**: Preemptive SJF
-**Round Robin (RR)**: Time slice each job in turns
-**MLFQ (Multi-Level Feedback Queue)**: Multiple queues with different priorities
-
 ### Key Metrics
-- **Turnaround Time**: T_completion - T_arrival
-- **Response Time**: T_first_run - T_arrival
-- **Average**: Sum of all times / number of jobs
+- **Turnaround Time**: T_turnaround = T_completion - T_arrival (performance metric)
+- **Response Time**: T_response = T_firstrun - T_arrival (interactivity metric)
+- **Trade-off**: Performance vs Fairness often at odds in scheduling
 
-### Visual: Process Scheduling Timeline
-```
-Jobs: A(100ms), B(10ms), C(10ms) all arrive at t=0
+### Basic Scheduling Algorithms
 
-FIFO:     |----A----|B|C|
-          0        100 110 120
-Avg Turnaround: (100+110+120)/3 = 110ms
+**FIFO (First In First Out)**:
+- Run jobs in order of arrival
+- Simple, easy to implement
+- **Problem**: **Convoy effect** - short jobs stuck behind long job (like cars behind slow truck)
 
-SJF:      |B|C|----A----|
-          0 10 20      120
-Avg Turnaround: (10+20+120)/3 = 50ms
+**SJF (Shortest Job First)**:
+- Run shortest job first (non-preemptive)
+- Optimal for turnaround time when all jobs arrive simultaneously
+- **Problem**: Still suffers convoy effect if short jobs arrive after long job starts
 
-Round Robin (time slice=10):
-|A|B|C|A|A|A|A|A|A|A|A|A|
-Avg Response: (0+10+20)/3 = 10ms
-```
+**STCF (Shortest Time-to-Completion First / Preemptive SJF)**:
+- Preempts currently running job when shorter job arrives
+- Any time new job enters, scheduler picks job with least time remaining
+- Optimal for turnaround time
+- **Problem**: Terrible for response time
+
+**Round Robin (RR)**:
+- Runs each job for time slice (scheduling quantum), then switches
+- Time slice must be multiple of timer-interrupt period
+- **Trade-off**: Shorter time slice = better response time BUT more context-switch overhead
+- **Amortization**: Longer time slices amortize context-switch cost (e.g., 1ms context switch + 100ms time slice = <1% overhead)
+- Excellent for response time
+- **Problem**: Terrible for turnaround time (stretches out every job)
+
+### Incorporating I/O
+- When job performs I/O, it's **blocked** waiting for completion
+- Scheduler should schedule another job during I/O
+- Treat each CPU burst as independent job
+- **Overlap**: CPU used by one process while waiting for I/O of another → better utilization
+
+### MLFQ (Multi-Level Feedback Queue)
+
+**Goal**: Schedule without perfect knowledge - optimize both turnaround time AND response time
+
+**Core Concept**: **Learn from history** to predict future behavior
+- Multiple queues, each with different priority level
+- Job on single queue at any time
+- MLFQ varies priority based on **observed behavior**
+  - Job repeatedly gives up CPU (interactive) → keep priority high
+  - Job uses CPU intensively → reduce priority
+
+**Five Rules of MLFQ**:
+1. If Priority(A) > Priority(B), A runs (B doesn't)
+2. If Priority(A) = Priority(B), A & B run in RR
+3. When job enters system, placed at **highest priority**
+4. Once job uses up **time allotment** at given level (regardless of how many times it gave up CPU), priority reduced
+5. After time period **S**, move **all** jobs to topmost queue (**priority boost**)
+
+**Allotment**: Amount of time job can spend at given priority level before scheduler reduces priority
+
+**Three Problems MLFQ Solves**:
+1. **Starvation**: Too many interactive jobs → long-running jobs never run
+   - **Solution**: Rule 5 (priority boost) guarantees all jobs make progress
+2. **Gaming**: Smart user issues I/O just before allotment expires to stay at high priority
+   - **Solution**: Rule 4 - better accounting tracks total time used at level
+3. **Changing behavior**: CPU-bound job becomes interactive
+   - **Solution**: Rule 5 allows job to regain high priority
+
+**Tuning MLFQ** ("voo-doo constants" - Ousterhout's Law):
+- How many queues?
+- Time slice per queue?
+- Allotment size?
+- Boost period S?
+- **Varying time slices**: High-priority queues get short slices (10ms), low-priority get longer slices (100s ms)
+
+**Real Implementations**:
+- Solaris: 60 queues, 20ms-few hundred ms slices, boost every ~1 second
+- BSD UNIX, Windows NT: use MLFQ variants
 
 ### Practice Questions with Answers
 
-**Q1: Given jobs A(50ms), B(30ms), C(20ms) arriving at t=0, calculate average turnaround time for SJF.**
+1. **What is the convoy effect? Give an example showing how SJF avoids it.**
+   - **Answer**: Convoy effect is when short jobs get stuck behind a long job, severely increasing average turnaround time. Example: Jobs A(100ms), B(10ms), C(10ms) arrive at t=0. FIFO: Avg turnaround = (100+110+120)/3 = 110ms (B and C wait for A). SJF runs B, C, A: Avg turnaround = (10+20+120)/3 = 50ms (more than 2× better).
 
-**Answer:**
-- Run order: C, B, A
-- C completes at 20ms (turnaround = 20)
-- B completes at 50ms (turnaround = 50)
-- A completes at 100ms (turnaround = 100)
-- Average = (20+50+100)/3 = **56.67ms**
+2. **Explain the fundamental trade-off between turnaround time and response time. Which schedulers optimize each?**
+   - **Answer**: Turnaround time (job completion) vs response time (interactivity) are at odds. To minimize turnaround, run shortest jobs first (unfair) - SJF/STCF optimize this. To minimize response, give all jobs quick turns (fair but stretches completion) - Round Robin optimizes this. Any fair scheduler hurts turnaround; any unfair scheduler hurts response.
 
-**Q2: What problem does STCF solve that SJF cannot handle?**
+3. **Jobs A(100ms) arrives at t=0, B(10ms) and C(10ms) arrive at t=10. Calculate average turnaround for STCF.**
+   - **Answer**:
+     - t=0-10: A runs (90ms left)
+     - t=10: B, C arrive and preempt A (shorter remaining time)
+     - t=10-20: B runs, completes (turnaround = 20-10 = 10ms)
+     - t=20-30: C runs, completes (turnaround = 30-10 = 20ms)
+     - t=30-130: A finishes (turnaround = 130-0 = 130ms)
+     - **Average = (130+10+20)/3 = 53.33ms**
 
-**Answer:** STCF is preemptive, so when a shorter job arrives, it can preempt the currently running job. SJF is non-preemptive and must wait for the current job to finish, leading to convoy effect when short jobs arrive after a long job has started.
+4. **In Round Robin, why does choosing time slice length involve a trade-off? What is amortization?**
+   - **Answer**: Shorter time slice = better response time (jobs run sooner) but more context-switch overhead wastes CPU. Longer time slice = amortizes context-switch cost across more work but hurts responsiveness. **Amortization**: Spreading fixed cost (context switch) over more work. Example: 1ms switch + 100ms slice = <1% overhead; 1ms switch + 10ms slice = 10% overhead.
 
-**Q3: Jobs A(100ms) arrives at t=0, B(10ms) arrives at t=10. Calculate average turnaround for FIFO vs STCF.**
+5. **How does MLFQ learn from history? Describe how it treats a new job vs a CPU-bound job.**
+   - **Answer**: MLFQ observes job behavior and adjusts priority accordingly. **New job**: Placed at highest priority (Rule 3), assuming it might be short/interactive. If it uses full time slices, priority drops (Rule 4), revealing it as CPU-bound. Eventually settles at low priority. **CPU-bound**: Stays at low priority with long time slices. This way MLFQ approximates SJF without knowing job lengths in advance.
 
-**Answer:**
-- **FIFO:** A finishes at 100, B finishes at 110
-  - Avg turnaround = ((100-0)+(110-10))/2 = (100+100)/2 = **100ms**
-- **STCF:** B preempts A at t=10, finishes at t=20, A finishes at t=120
-  - Avg turnaround = ((120-0)+(20-10))/2 = (120+10)/2 = **65ms**
+6. **Explain how a malicious user could game early MLFQ (without Rule 4 better accounting). How does Rule 4 prevent this?**
+   - **Answer**: **Gaming**: Issue I/O just before time slice expires (e.g., at 99% of slice). Old rules let job stay at high priority because it "voluntarily" gave up CPU. Repeat to monopolize CPU at high priority. **Rule 4 fix**: Tracks total time used at priority level. Whether job uses allotment in one burst or many small pieces doesn't matter - once allotment exhausted, priority drops. Can't game the system.
 
-**Q4: Why is Round Robin bad for turnaround time but good for response time?**
-
-**Answer:** RR gives every job a quick time slice, so all jobs start running quickly (good response time). However, jobs take longer to complete because they're constantly being switched out, increasing turnaround time. The overhead of context switching also adds to completion time.
-
-**Q5: In MLFQ, why do we periodically boost all jobs to the highest priority queue?**
-
-**Answer:** To prevent starvation of long-running jobs and to handle jobs that change behavior (e.g., from CPU-bound to interactive). Without boosting, a job that used up its time slices early would stay in low-priority queues forever, even if it becomes interactive later.
-
-**Q6: Three jobs arrive: A at t=0 (runtime=30), B at t=5 (runtime=20), C at t=10 (runtime=10). Using RR with time slice=10, when does each job complete?**
-
-**Answer:**
-```
-Timeline:
-0-10: A runs (20 left)
-10-20: B runs (10 left)
-20-30: C runs (done at 30)
-30-40: A runs (10 left)
-40-50: B runs (done at 50)
-50-60: A runs (done at 60)
-```
-- C completes at **30ms**
-- B completes at **50ms**
-- A completes at **60ms**
-
-**Q7: What is the convoy effect and which algorithm suffers from it?**
-
-**Answer:** Convoy effect occurs when short jobs get stuck behind a long job, like cars stuck behind a slow truck. **FIFO** suffers from this because if a long job arrives first, all subsequent short jobs must wait for it to complete, even though running the short jobs first would minimize average turnaround time.
+7. **Why does MLFQ need Rule 5 (priority boost)? What is a "voo-doo constant" and give an example from MLFQ.**
+   - **Answer**: **Rule 5 prevents**: (1) Starvation - ensures long-running jobs get some CPU time even with many interactive jobs, (2) Handles behavior changes - CPU-bound job that becomes interactive gets another chance at high priority. **Voo-doo constant**: Parameter requiring "black magic" to set correctly (Ousterhout's Law). Example: boost period **S** - too high → starvation; too low → interactive jobs don't get fair CPU. No perfect formula, requires experimentation/tuning.
 
 ---
 
